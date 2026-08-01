@@ -1,0 +1,59 @@
+# Gradle
+.gradle/
+build/
+*/build/
+!*/src/main/**/build/
+
+# Local configuration
+local.properties
+gradle.properties
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+*.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android
+*.apk
+*.ap_
+*.aab
+*.aar
+output/
+
+# Debug
+/out/
+
+# Signing
+*.keystore
+*.jks
+signing.properties
+
+# Testing
+test-output/
+reports/
+
+# Firebase
+google-services.json
+
+# Compose
+compose-*
+
+# Kotlin
+*.kt.bin
+
+# Misc
+*.log
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# VS Code
+.vscode/
+*.code-workspace
