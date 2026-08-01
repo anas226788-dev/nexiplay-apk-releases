@@ -57,3 +57,4 @@ compose-*
 # VS Code
 .vscode/
 *.code-workspace
+!NexiPlayApp.code-workspace
