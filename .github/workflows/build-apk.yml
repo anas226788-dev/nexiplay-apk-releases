@@ -13,9 +13,12 @@ on:
         default: 'both'
         type: choice
         options:
-          - debug
-          - release
           - both
+          - release
+          - debug
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -97,26 +100,42 @@ jobs:
           EOF
           fi
 
-      - name: Build Debug APK
-        if: "${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name == 'push' }}"
-        run: ./gradlew assembleDebug --stacktrace --no-daemon --max-workers=2
-
       - name: Build Release APK
-        if: "${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' }}"
+        if: "${{ github.event_name == 'push' || github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' }}"
         run: ./gradlew assembleRelease --stacktrace --no-daemon --max-workers=2
 
-      - name: Upload Debug APK
-        if: "${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name == 'push' }}"
+      - name: Build Debug APK
+        if: "${{ github.event_name == 'push' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' }}"
+        run: ./gradlew assembleDebug --stacktrace --no-daemon --max-workers=2
+
+      - name: Prepare APKs for Distribution
+        run: |
+          mkdir -p release-apks
+          if ls app/build/outputs/apk/release/*.apk 1> /dev/null 2>&1; then
+            cp app/build/outputs/apk/release/*.apk release-apks/NexiPlay-v1.0.7-release.apk
+          fi
+          if ls app/build/outputs/apk/debug/*.apk 1> /dev/null 2>&1; then
+            cp app/build/outputs/apk/debug/*.apk release-apks/NexiPlay-v1.0.7-debug.apk
+          fi
+          echo "Generated APKs:"
+          ls -lh release-apks/
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: NexiPlay-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: NexiPlay-APKs
+          path: release-apks/*.apk
           retention-days: 14
 
-      - name: Upload Release APK
-        if: "${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' }}"
-        uses: actions/upload-artifact@v4
+      - name: Publish to GitHub Releases
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
         with:
-          name: NexiPlay-Release-APK
-          path: app/build/outputs/apk/release/*.apk
-          retention-days: 14
+          tag_name: v1.0.7
+          name: "NexiPlay App v1.0.7"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release-apks/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
