@@ -35,7 +35,9 @@ data class Movie(
     @SerialName("app_streaming_enabled") val appStreamingEnabled: Boolean? = true,
     @SerialName("notice_enabled") val noticeEnabled: Boolean? = false,
     @SerialName("notice_text") val noticeText: String? = null,
-    @SerialName("created_at") val createdAt: String,
+    @SerialName("admin_note") val adminNote: String? = null,
+    @SerialName("is_pinned") val isPinned: Boolean? = false,
+    @SerialName("created_at") val createdAt: String? = null,
 )
 
 @Serializable

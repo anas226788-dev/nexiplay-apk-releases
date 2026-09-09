@@ -286,6 +286,9 @@ fun WatchScreen(
                         select()
                     }.decodeSingle<UserEvent>()
                     eventId = inserted.id
+
+                    // Record watch for daily coin rewards
+                    com.nexiplay.app.data.util.CoinRewardHelper.recordEpisodeWatch(context)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -638,7 +641,8 @@ fun WatchScreen(
                                                         }
                                                     }
                                                     
-                                                    if (isPremium && !isPremiumUnlocked && com.nexiplay.app.data.util.AdManager.isPremiumServerAdEnabled) {
+                                                    val isPremiumLocked = isPremium && !isPremiumUnlocked && !com.nexiplay.app.data.util.AdManager.isUserPremium() && com.nexiplay.app.data.util.AdManager.isPremiumServerAdEnabled
+                                                    if (isPremiumLocked) {
                                                         android.widget.Toast.makeText(context, "Loading Ad to unlock premium server...", android.widget.Toast.LENGTH_SHORT).show()
                                                         com.nexiplay.app.data.util.AdManager.showRewardedAd(
                                                             context = context,
@@ -658,7 +662,8 @@ fun WatchScreen(
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                if (isPremium && !isPremiumUnlocked && com.nexiplay.app.data.util.AdManager.isPremiumServerAdEnabled) {
+                                                val isPremiumLocked = isPremium && !isPremiumUnlocked && !com.nexiplay.app.data.util.AdManager.isUserPremium() && com.nexiplay.app.data.util.AdManager.isPremiumServerAdEnabled
+                                                if (isPremiumLocked) {
                                                     Icon(Icons.Default.PlayCircle, null, modifier = Modifier.size(14.dp), tint = com.nexiplay.app.ui.theme.GoldVip)
                                                     Spacer(Modifier.width(4.dp))
                                                 }

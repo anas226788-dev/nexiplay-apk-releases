@@ -78,7 +78,7 @@ fun NotificationsScreen(navController: NavController, viewModel: NotificationVie
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(state.notifications) { notification ->
+                items(state.notifications, key = { it.id }) { notification ->
                     NotificationCard(notification, onRead = { viewModel.markAsRead(it) })
                 }
             }

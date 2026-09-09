@@ -705,35 +705,61 @@ private fun EarnCoinsSection(activity: android.app.Activity?, context: Context, 
         // Standard Tasks
         val currentStreak = vm.state.value.streak?.currentStreak ?: 0
         val longestStreak = vm.state.value.streak?.longestStreak ?: 0
-        val is7Completed = currentStreak >= 7 || longestStreak >= 7
-        val is30Completed = currentStreak >= 30 || longestStreak >= 30
+        val is7Eligible = currentStreak >= 7 || longestStreak >= 7
+        val is30Eligible = currentStreak >= 30 || longestStreak >= 30
+        val is7Claimed = vm.isStreakMilestoneClaimed(7, context)
+        val is30Claimed = vm.isStreakMilestoneClaimed(30, context)
 
         TaskItem("Daily Login", "Come back every day", Icons.Rounded.EventAvailable, "+5")
-        TaskItem("Watch 2 Episodes", "Enjoy your favorite shows", Icons.Rounded.OndemandVideo, "+35")
-        TaskItem("Download 2 Content", "Save for offline viewing", Icons.Rounded.CloudDownload, "+20")
+        TaskItem("Watch 2 Episodes", "Enjoy your favorite shows (Daily)", Icons.Rounded.OndemandVideo, "+35")
+        TaskItem("Download 2 Content", "Save for offline viewing (Daily)", Icons.Rounded.CloudDownload, "+20")
         TaskItem(
-            title = "7-Day Streak",
-            desc = if (is7Completed) "7-Day streak milestone reached!" else "Stay consistent for a week ($currentStreak/7 days)",
+            title = "7-Day Streak Milestone",
+            desc = when {
+                is7Claimed -> "✓ 7-Day streak milestone bonus claimed!"
+                is7Eligible -> "🎉 Reached! Tap to claim your +50 Bonus Coins!"
+                else -> "Stay consistent for 7 days ($currentStreak/7 days)"
+            },
             icon = Icons.Rounded.LocalFireDepartment,
-            reward = if (is7Completed) "✓ Reached" else "+50",
+            reward = when {
+                is7Claimed -> "✓ Claimed"
+                is7Eligible -> "CLAIM +50"
+                else -> "+50"
+            },
+            isFeatured = is7Eligible && !is7Claimed,
             onClick = {
-                if (is7Completed) {
-                    Toast.makeText(context, "🎉 You have reached the 7-day streak milestone!", Toast.LENGTH_SHORT).show()
+                if (is7Claimed) {
+                    Toast.makeText(context, "✓ You have already claimed the 7-Day streak bonus!", Toast.LENGTH_SHORT).show()
+                } else if (is7Eligible) {
+                    vm.claimStreakMilestone(7, 50, context)
                 } else {
-                    Toast.makeText(context, "Claim daily for 7 consecutive days to automatically earn +50 Bonus Coins on Day 7!", Toast.LENGTH_LONG).show()
+                    val remaining = 7 - (currentStreak % 7)
+                    Toast.makeText(context, "Claim daily for 7 days to unlock +50 Bonus Coins! ($remaining days remaining)", Toast.LENGTH_LONG).show()
                 }
             }
         )
         TaskItem(
-            title = "30-Day Streak",
-            desc = if (is30Completed) "30-Day streak milestone reached!" else "A full month of dedication ($currentStreak/30 days)",
+            title = "30-Day Streak Milestone",
+            desc = when {
+                is30Claimed -> "✓ 30-Day streak milestone bonus claimed!"
+                is30Eligible -> "🏆 Reached! Tap to claim your +250 Bonus Coins!"
+                else -> "A full month of dedication ($currentStreak/30 days)"
+            },
             icon = Icons.Rounded.WorkspacePremium,
-            reward = if (is30Completed) "✓ Reached" else "+250",
+            reward = when {
+                is30Claimed -> "✓ Claimed"
+                is30Eligible -> "CLAIM +250"
+                else -> "+250"
+            },
+            isFeatured = is30Eligible && !is30Claimed,
             onClick = {
-                if (is30Completed) {
-                    Toast.makeText(context, "🏆 You have reached the 30-day streak milestone!", Toast.LENGTH_SHORT).show()
+                if (is30Claimed) {
+                    Toast.makeText(context, "✓ You have already claimed the 30-Day streak bonus!", Toast.LENGTH_SHORT).show()
+                } else if (is30Eligible) {
+                    vm.claimStreakMilestone(30, 250, context)
                 } else {
-                    Toast.makeText(context, "Claim daily for 30 consecutive days to automatically earn +250 Bonus Coins on Day 30!", Toast.LENGTH_LONG).show()
+                    val remaining = 30 - (currentStreak % 30)
+                    Toast.makeText(context, "Claim daily for 30 days to unlock +250 Bonus Coins! ($remaining days remaining)", Toast.LENGTH_LONG).show()
                 }
             }
         )

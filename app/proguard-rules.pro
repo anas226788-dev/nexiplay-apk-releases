@@ -20,3 +20,33 @@
 
 # ExoPlayer
 -keep class androidx.media3.** { *; }
+
+# ── Ad SDKs (CRITICAL - Without these, R8 strips ad classes in release builds) ──
+
+# Start.io SDK
+-keep class com.startapp.** { *; }
+-dontwarn com.startapp.**
+-keepattributes Exceptions, InnerClasses
+
+# Unity LevelPlay / IronSource SDK & Unity Ads
+-keep class com.ironsource.** { *; }
+-dontwarn com.ironsource.**
+-keep class com.unity3d.** { *; }
+-dontwarn com.unity3d.**
+-keep class com.unity3d.services.** { *; }
+-dontwarn com.unity3d.services.**
+-keep class com.unity3d.ads.** { *; }
+-dontwarn com.unity3d.ads.**
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
+# Google Play Services (required by both ad SDKs)
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.android.gms.**
+
+# AdManager data class
+-keep class com.nexiplay.app.data.util.AdSettings { *; }
+-keep class com.nexiplay.app.data.util.AdManager { *; }
+

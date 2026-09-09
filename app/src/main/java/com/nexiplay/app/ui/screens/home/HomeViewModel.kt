@@ -10,6 +10,8 @@ import com.nexiplay.app.data.model.UpdateItem
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -32,7 +34,13 @@ class HomeViewModel : ViewModel() {
     private val _state = MutableStateFlow(HomeState())
     val state = _state.asStateFlow()
 
-    private val cols = Columns.raw("id, title, slug, poster_url, description, type, release_year, is_trending, trending_rank, is_running, is_adult, banner_url_desktop, banner_url_mobile, last_episode, running_notice, next_episode_date, created_at")
+    private val cols = Columns.raw("id, title, slug, poster_url, description, type, release_year, is_trending, trending_rank, is_running, is_adult, banner_url_desktop, banner_url_mobile, last_episode, running_notice, next_episode_date, created_at, admin_note")
+
+    private fun List<Movie>.prioritizePinned(): List<Movie> {
+        val pinned = this.filter { it.isPinned == true || it.adminNote == "pinned" }
+        val unpinned = this.filter { !(it.isPinned == true || it.adminNote == "pinned") }
+        return pinned + unpinned
+    }
 
     init { loadHome() }
 
@@ -46,66 +54,93 @@ class HomeViewModel : ViewModel() {
             try {
                 val db = SupabaseClient.main
 
-                val updates = try {
-                    db.from("updates").select {
-                        filter { eq("is_active", true) }
-                        order("updated_at", Order.DESCENDING)
-                        limit(10)
-                    }.decodeList<UpdateItem>()
-                } catch (_: Exception) { emptyList() }
+                // Execute all 8 queries in parallel concurrently on background IO pool
+                val updatesDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("updates").select {
+                            filter { eq("is_active", true) }
+                            order("updated_at", Order.DESCENDING)
+                            limit(10)
+                        }.decodeList<UpdateItem>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val upcoming = try {
-                    db.from("upcoming").select {
-                        order("release_date", Order.ASCENDING)
-                        limit(10)
-                    }.decodeList<Upcoming>()
-                } catch (_: Exception) { emptyList() }
+                val upcomingDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("upcoming").select {
+                            order("release_date", Order.ASCENDING)
+                            limit(10)
+                        }.decodeList<Upcoming>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val categories = try {
-                    db.from("categories").select {
-                        order("name", Order.ASCENDING)
-                    }.decodeList<Category>()
-                } catch (_: Exception) { emptyList() }
+                val categoriesDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("categories").select {
+                            order("name", Order.ASCENDING)
+                        }.decodeList<Category>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val trending = db.from("movies").select(cols) {
-                    filter { eq("is_trending", true) }
-                    order("trending_rank", Order.ASCENDING)
-                    limit(10)
-                }.decodeList<Movie>()
+                val trendingDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("movies").select(cols) {
+                            filter { eq("is_trending", true) }
+                            order("trending_rank", Order.ASCENDING)
+                            limit(10)
+                        }.decodeList<Movie>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val recentMovies = db.from("movies").select(cols) {
-                    filter { eq("type", "movie") }
-                    order("created_at", Order.DESCENDING)
-                    limit(10)
-                }.decodeList<Movie>()
+                val recentMoviesDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("movies").select(cols) {
+                            filter { eq("type", "movie") }
+                            order("created_at", Order.DESCENDING)
+                            limit(10)
+                        }.decodeList<Movie>().prioritizePinned()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val recentAnime = db.from("movies").select(cols) {
-                    filter { eq("type", "anime") }
-                    order("created_at", Order.DESCENDING)
-                    limit(10)
-                }.decodeList<Movie>()
+                val recentAnimeDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("movies").select(cols) {
+                            filter { eq("type", "anime") }
+                            order("created_at", Order.DESCENDING)
+                            limit(10)
+                        }.decodeList<Movie>().prioritizePinned()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val recentSeries = db.from("movies").select(cols) {
-                    filter { eq("type", "series") }
-                    order("created_at", Order.DESCENDING)
-                    limit(10)
-                }.decodeList<Movie>()
+                val recentSeriesDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("movies").select(cols) {
+                            filter { eq("type", "series") }
+                            order("created_at", Order.DESCENDING)
+                            limit(10)
+                        }.decodeList<Movie>().prioritizePinned()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                val running = db.from("movies").select(cols) {
-                    filter { eq("is_running", true) }
-                    order("created_at", Order.DESCENDING)
-                    limit(10)
-                }.decodeList<Movie>()
+                val runningDef = async(Dispatchers.IO) {
+                    try {
+                        db.from("movies").select(cols) {
+                            filter { eq("is_running", true) }
+                            order("created_at", Order.DESCENDING)
+                            limit(10)
+                        }.decodeList<Movie>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
                 _state.value = HomeState(
-                    trending = trending,
-                    updates = updates,
-                    upcoming = upcoming,
-                    categories = categories,
-                    recentMovies = recentMovies,
-                    recentAnime = recentAnime,
-                    recentSeries = recentSeries,
-                    running = running,
+                    trending = trendingDef.await(),
+                    updates = updatesDef.await(),
+                    upcoming = upcomingDef.await(),
+                    categories = categoriesDef.await(),
+                    recentMovies = recentMoviesDef.await(),
+                    recentAnime = recentAnimeDef.await(),
+                    recentSeries = recentSeriesDef.await(),
+                    running = runningDef.await(),
                     isLoading = false,
                     isRefreshing = false,
                 )

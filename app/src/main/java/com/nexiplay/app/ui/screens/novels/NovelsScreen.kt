@@ -1,19 +1,29 @@
 package com.nexiplay.app.ui.screens.novels
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -21,13 +31,9 @@ import androidx.navigation.NavController
 import coil3.compose.AsyncImage
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Novel
+import com.nexiplay.app.ui.components.bounceClick
 import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
-import com.nexiplay.app.ui.components.bounceClick
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.border
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MenuBook
 import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.launch
 
@@ -36,6 +42,7 @@ fun NovelsScreen(navController: NavController) {
     var novels by remember { mutableStateOf<List<Novel>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     fun fetchNovels() {
@@ -55,18 +62,106 @@ fun NovelsScreen(navController: NavController) {
         fetchNovels()
     }
 
+    val filteredNovels = remember(novels, searchQuery) {
+        if (searchQuery.isBlank()) {
+            novels
+        } else {
+            val query = searchQuery.trim().lowercase()
+            novels.filter { novel ->
+                novel.title.lowercase().contains(query) ||
+                novel.author?.lowercase()?.contains(query) == true ||
+                novel.description?.lowercase()?.contains(query) == true ||
+                novel.status?.lowercase()?.contains(query) == true
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(themeBg())
     ) {
         // Header
-        Text(
-            text = "📖 Novels",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Black,
-            color = themeTextPrimary(),
-            modifier = Modifier.padding(16.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "📖 Novels",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    color = themeTextPrimary(),
+                    fontFamily = InterFont
+                )
+                if (novels.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(NexiRed.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (searchQuery.isNotEmpty()) "${filteredNovels.size} found" else "${novels.size} books",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NexiRed,
+                            fontFamily = InterFont
+                        )
+                    }
+                }
+            }
+        }
+
+        // Search Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = {
+                Text(
+                    "Search novels by title, author, genre...",
+                    color = themeTextTertiary(),
+                    fontSize = 13.sp,
+                    fontFamily = InterFont
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = if (searchQuery.isNotEmpty()) NexiRed else themeTextSecondary(),
+                    modifier = Modifier.size(20.dp)
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Clear",
+                            tint = themeTextSecondary(),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = themeCard(),
+                unfocusedContainerColor = themeCard(),
+                focusedBorderColor = NexiRed,
+                unfocusedBorderColor = themeSurface(),
+                focusedTextColor = themeTextPrimary(),
+                unfocusedTextColor = themeTextPrimary(),
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 8.dp)
         )
 
         if (loading) {
@@ -78,7 +173,41 @@ fun NovelsScreen(navController: NavController) {
             )
         } else if (novels.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No novels available yet", color = themeTextSecondary())
+                Text("No novels available yet", color = themeTextSecondary(), fontFamily = InterFont)
+            }
+        } else if (filteredNovels.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("🔍", fontSize = 48.sp)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "No novels found",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = themeTextPrimary(),
+                    fontFamily = InterFont
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "We couldn't find any novel matching \"$searchQuery\"",
+                    fontSize = 13.sp,
+                    color = themeTextSecondary(),
+                    textAlign = TextAlign.Center,
+                    fontFamily = InterFont
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = { searchQuery = "" },
+                    colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Clear Search", fontWeight = FontWeight.Bold, fontFamily = InterFont)
+                }
             }
         } else {
             LazyVerticalGrid(
@@ -87,7 +216,7 @@ fun NovelsScreen(navController: NavController) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                items(novels) { novel ->
+                items(filteredNovels, key = { it.id }) { novel ->
                     NovelCard(
                         novel = novel,
                         onClick = { navController.navigate(Screen.NovelDetail.createRoute(novel.slug)) }
@@ -158,13 +287,14 @@ private fun NovelCard(novel: Novel, onClick: () -> Unit) {
                         .align(Alignment.BottomStart)
                         .padding(12.dp)
                 ) {
-                    Icon(androidx.compose.material.icons.Icons.Default.MenuBook, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                    Icon(Icons.Default.MenuBook, null, tint = Color.White, modifier = Modifier.size(12.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(
                         "${novel.totalChapters} Chapters", 
                         fontSize = 11.sp, 
                         color = Color.White, 
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = InterFont
                     )
                 }
             }

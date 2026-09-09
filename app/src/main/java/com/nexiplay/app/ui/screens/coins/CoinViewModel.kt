@@ -158,7 +158,9 @@ class CoinViewModel : ViewModel() {
     fun getNextClaimReward(context: android.content.Context): Int {
         val streak = _state.value.streak
         val todayDate = LocalDate.now()
-        val lastClaimStr = streak?.lastDailyClaim ?: streak?.lastLoginDate ?: ""
+        val lastClaimStr = streak?.lastDailyClaim?.takeIf { it.isNotBlank() }
+            ?: streak?.lastLoginDate?.takeIf { it.isNotBlank() }
+            ?: ""
         val oldStreak = streak?.currentStreak ?: 0
 
         val lastClaimDate = try {
@@ -179,11 +181,98 @@ class CoinViewModel : ViewModel() {
         }
 
         val baseReward = when {
-            nextStreak >= 30 && nextStreak % 30 == 0 -> 250
-            nextStreak >= 7 && nextStreak % 7 == 0 -> 50
+            nextStreak > 0 && nextStreak % 30 == 0 -> 250
+            nextStreak > 0 && nextStreak % 7 == 0 -> 50
             else -> 5
         }
         return if (isBoostActive(context)) baseReward * 2 else baseReward
+    }
+
+    fun isStreakMilestoneClaimed(milestoneDays: Int, context: android.content.Context): Boolean {
+        val uid = _state.value.userId ?: return false
+        val prefs = context.getSharedPreferences("NexiPlayMilestones", android.content.Context.MODE_PRIVATE)
+        return prefs.getBoolean("claimed_${milestoneDays}_$uid", false)
+    }
+
+    fun claimStreakMilestone(milestoneDays: Int, rewardAmount: Int, context: android.content.Context) {
+        viewModelScope.launch {
+            val uid = _state.value.userId ?: return@launch
+            val streak = _state.value.streak
+            val curStreak = streak?.currentStreak ?: 0
+            val bestStreak = streak?.longestStreak ?: 0
+            val reached = curStreak >= milestoneDays || bestStreak >= milestoneDays
+
+            if (!reached) {
+                android.widget.Toast.makeText(context, "You need a $milestoneDays-day streak to claim this!", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            val prefs = context.getSharedPreferences("NexiPlayMilestones", android.content.Context.MODE_PRIVATE)
+            val key = "claimed_${milestoneDays}_$uid"
+            if (prefs.getBoolean(key, false)) {
+                android.widget.Toast.makeText(context, "You have already claimed this milestone reward!", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            try {
+                val finalAmount = if (isBoostActive(context)) rewardAmount * 2 else rewardAmount
+                val freshBal = try {
+                    SupabaseClient.main.from("coin_balances")
+                        .select { filter { eq("user_id", uid) } }
+                        .decodeSingleOrNull<CoinBalance>()
+                } catch (_: Exception) { null }
+
+                val currentBal = freshBal?.balance ?: _state.value.balance?.balance ?: 0
+                val currentEarned = freshBal?.totalEarned ?: _state.value.balance?.totalEarned ?: 0
+                val currentSpent = freshBal?.totalSpent ?: _state.value.balance?.totalSpent ?: 0
+
+                val newBal = currentBal + finalAmount
+                val newEarned = currentEarned + finalAmount
+
+                if (freshBal == null) {
+                    val insertBalJson = buildJsonObject {
+                        put("user_id", JsonPrimitive(uid))
+                        put("balance", JsonPrimitive(newBal))
+                        put("total_earned", JsonPrimitive(newEarned))
+                        put("total_spent", JsonPrimitive(currentSpent))
+                    }
+                    SupabaseClient.main.from("coin_balances").insert(insertBalJson)
+                } else {
+                    val balanceJson = buildJsonObject {
+                        put("balance", JsonPrimitive(newBal))
+                        put("total_earned", JsonPrimitive(newEarned))
+                        put("total_spent", JsonPrimitive(currentSpent))
+                    }
+                    SupabaseClient.main.from("coin_balances").update(balanceJson) { filter { eq("user_id", uid) } }
+                }
+
+                val txJson = buildJsonObject {
+                    put("user_id", JsonPrimitive(uid))
+                    put("amount", JsonPrimitive(finalAmount))
+                    put("type", JsonPrimitive("streak_milestone_$milestoneDays"))
+                    put("description", JsonPrimitive("🎉 Claimed $milestoneDays-Day Streak Milestone Reward!"))
+                }
+                SupabaseClient.main.from("coin_transactions").insert(txJson)
+
+                prefs.edit().putBoolean(key, true).apply()
+
+                _state.value = _state.value.copy(
+                    balance = CoinBalance(
+                        userId = uid,
+                        balance = newBal,
+                        totalEarned = newEarned,
+                        totalSpent = currentSpent
+                    ),
+                    showPurchaseDialog = true,
+                    purchaseSuccessMessage = "🎉 Awesome! You earned +$finalAmount coins for reaching the $milestoneDays-Day Streak Milestone!"
+                )
+
+                delay(300)
+                loadData()
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Failed to claim milestone: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     fun claimDaily(context: android.content.Context) {
@@ -204,7 +293,9 @@ class CoinViewModel : ViewModel() {
                         .decodeSingleOrNull<CoinStreak>()
                 } catch (_: Exception) { null }
 
-                val lastClaimStr = freshStreak?.lastDailyClaim ?: ""
+                val lastClaimStr = freshStreak?.lastDailyClaim?.takeIf { it.isNotBlank() }
+                    ?: freshStreak?.lastLoginDate?.takeIf { it.isNotBlank() }
+                    ?: ""
                 if (lastClaimStr.startsWith(today)) {
                     // Already claimed today - sync UI
                     _state.value = _state.value.copy(
@@ -227,18 +318,18 @@ class CoinViewModel : ViewModel() {
                     1
                 } else {
                     val daysBetween = ChronoUnit.DAYS.between(lastClaimDate, todayDate)
-                    when (daysBetween) {
-                        0L -> oldStreak // Same day fallback
-                        1L -> oldStreak + 1 // Claimed yesterday -> increment streak!
-                        else -> 1 // Missed 1 or more days -> reset to 1
+                    when {
+                        daysBetween <= 0L -> maxOf(1, oldStreak) // Same day fallback
+                        daysBetween == 1L -> oldStreak + 1      // Claimed yesterday -> increment streak!
+                        else -> 1                               // Missed 1 or more days -> reset to 1
                     }
                 }
                 val longestStreak = maxOf(newStreak, freshStreak?.longestStreak ?: 0)
 
                 // ── Calculate reward ──
                 val baseReward = when {
-                    newStreak >= 30 && newStreak % 30 == 0 -> 250
-                    newStreak >= 7 && newStreak % 7 == 0 -> 50
+                    newStreak > 0 && newStreak % 30 == 0 -> 250
+                    newStreak > 0 && newStreak % 7 == 0 -> 50
                     else -> 5
                 }
                 
@@ -277,9 +368,9 @@ class CoinViewModel : ViewModel() {
 
                 // ── 2. Insert coin_transaction ──
                 val desc = when {
-                    newStreak >= 30 && newStreak % 30 == 0 -> "🎉 30-day streak bonus!"
-                    newStreak >= 7 && newStreak % 7 == 0 -> "🔥 7-day streak bonus!"
-                    else -> "Daily login reward"
+                    newStreak > 0 && newStreak % 30 == 0 -> "🎉 30-day streak bonus ($newStreak days)!"
+                    newStreak > 0 && newStreak % 7 == 0 -> "🔥 7-day streak bonus ($newStreak days)!"
+                    else -> "Daily login reward (Day $newStreak)"
                 }
                 val txJson = buildJsonObject {
                     put("user_id", JsonPrimitive(uid))

@@ -218,6 +218,7 @@ private fun HeroSlider(movies: List<Movie>, onMovieClick: (Movie) -> Unit) {
     Box(modifier = Modifier.fillMaxWidth()) {
         HorizontalPager(
             state = pagerState,
+            key = { movies[it].id },
             modifier = Modifier.fillMaxWidth().height(420.dp),
         ) { page ->
             val movie = movies[page]
@@ -411,7 +412,7 @@ private fun RunningSection(items: List<Movie>, navController: NavController) {
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items) { movie ->
+            items(items, key = { it.id }) { movie ->
                 RunningCard(
                     movie = movie,
                     onClick = {
@@ -526,7 +527,7 @@ private fun ContentRow(title: String, items: List<Movie>, navController: NavCont
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items) { movie ->
+            items(items, key = { it.id }) { movie ->
                 MovieCard(
                     movie = movie,
                     onClick = {
@@ -702,7 +703,7 @@ private fun LatestUpdatesSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(updates) { item ->
+            items(updates, key = { it.id }) { item ->
                 LatestUpdateCard(
                     item = item,
                     onClick = {
@@ -858,7 +859,7 @@ private fun UpcomingSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items) { item ->
+            items(items, key = { it.id }) { item ->
                 UpcomingCard(
                     item = item,
                     onClick = {

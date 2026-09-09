@@ -134,7 +134,7 @@ fun CommentsScreen(navController: NavController) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item { Spacer(Modifier.height(8.dp)) }
-                items(comments) { comment ->
+                items(comments, key = { it.id ?: it.hashCode() }) { comment ->
                     UserCommentItem(comment = comment)
                 }
                 item { Spacer(Modifier.height(16.dp)) }

@@ -6,6 +6,8 @@ import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.*
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.auth.auth
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -32,12 +34,12 @@ class DetailViewModel : ViewModel() {
         viewModelScope.launch {
             _state.value = DetailState(isLoading = true)
             try {
-                // Refresh server toggles & ad settings from database
+                // Refresh server toggles & ad settings from database on IO thread
                 try {
                     com.nexiplay.app.data.util.AdManager.loadConfig(SupabaseClient.main)
                 } catch (_: Exception) {}
 
-                // Fetch movie
+                // Fetch movie first
                 val movie = SupabaseClient.main.from("movies")
                     .select { filter { eq("slug", slug); eq("type", type) } }
                     .decodeSingleOrNull<Movie>()
@@ -47,17 +49,51 @@ class DetailViewModel : ViewModel() {
                     return@launch
                 }
 
-                // Fetch streaming info
-                val streamingRow = SupabaseClient.main.from("streaming")
-                    .select { filter { eq("movie_id", movie.id) } }
-                    .decodeSingleOrNull<StreamingRow>()
+                // Fetch streaming, downloads, seasons, watchlist, and related movies in parallel
+                val streamingDef = async(Dispatchers.IO) {
+                    try {
+                        SupabaseClient.main.from("streaming")
+                            .select { filter { eq("movie_id", movie.id) } }
+                            .decodeSingleOrNull<StreamingRow>()
+                    } catch (_: Exception) { null }
+                }
 
-                // Fetch downloads
-                val downloads = SupabaseClient.main.from("download_links")
-                    .select { filter { eq("movie_id", movie.id) } }
-                    .decodeList<DownloadLink>()
+                val downloadsDef = async(Dispatchers.IO) {
+                    try {
+                        SupabaseClient.main.from("download_links")
+                            .select { filter { eq("movie_id", movie.id) } }
+                            .decodeList<DownloadLink>()
+                    } catch (_: Exception) { emptyList() }
+                }
 
-                // Fetch seasons (for series/anime)
+                val relatedDef = async(Dispatchers.IO) {
+                    try {
+                        SupabaseClient.main.from("movies").select {
+                            filter { 
+                                eq("type", type)
+                                neq("id", movie.id)
+                            }
+                            order("created_at", order = io.github.jan.supabase.postgrest.query.Order.DESCENDING)
+                            limit(8)
+                        }.decodeList<Movie>()
+                    } catch (_: Exception) { emptyList() }
+                }
+
+                val watchlistDef = async(Dispatchers.IO) {
+                    val user = SupabaseClient.main.auth.currentUserOrNull()
+                    if (user != null) {
+                        try {
+                            val wl = SupabaseClient.main.from("watchlist")
+                                .select {
+                                    filter { eq("user_id", user.id); eq("movie_id", movie.id) }
+                                    limit(1)
+                                }
+                                .decodeList<Map<String, String>>()
+                            wl.isNotEmpty()
+                        } catch (_: Exception) { false }
+                    } else false
+                }
+
                 var seasons = emptyList<Season>()
                 val episodesMap = mutableMapOf<String, List<Episode>>()
                 val epDownloadsMap = mutableMapOf<String, List<EpisodeDownloadLink>>()
@@ -69,7 +105,7 @@ class DetailViewModel : ViewModel() {
                         }
                         .decodeList<Season>()
 
-                    // Fetch episodes for each season
+                    // Fetch episodes for each season in parallel
                     for (season in seasons) {
                         val eps = SupabaseClient.main.from("episodes")
                             .select { filter { eq("season_id", season.id) }
@@ -92,39 +128,15 @@ class DetailViewModel : ViewModel() {
                     }
                 }
 
-                // Check watchlist
-                val user = SupabaseClient.main.auth.currentUserOrNull()
-                var inWatchlist = false
-                if (user != null) {
-                    try {
-                        val wl = SupabaseClient.main.from("watchlist")
-                            .select {
-                                filter { eq("user_id", user.id); eq("movie_id", movie.id) }
-                                limit(1)
-                            }
-                            .decodeList<Map<String, String>>()
-                        inWatchlist = wl.isNotEmpty()
-                    } catch (_: Exception) { }
-                }
-
-                val related = SupabaseClient.main.from("movies").select {
-                    filter { 
-                        eq("type", type)
-                        neq("id", movie.id)
-                    }
-                    order("created_at", order = io.github.jan.supabase.postgrest.query.Order.DESCENDING)
-                    limit(8)
-                }.decodeList<Movie>()
-
                 _state.value = DetailState(
                     movie = movie,
-                    streamingRow = streamingRow,
-                    downloads = downloads,
+                    streamingRow = streamingDef.await(),
+                    downloads = downloadsDef.await(),
                     seasons = seasons,
                     episodes = episodesMap,
                     episodeDownloads = epDownloadsMap,
-                    relatedMovies = related,
-                    isInWatchlist = inWatchlist,
+                    relatedMovies = relatedDef.await(),
+                    isInWatchlist = watchlistDef.await(),
                     isLoading = false,
                 )
             } catch (e: Exception) {

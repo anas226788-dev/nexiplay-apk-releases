@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
@@ -22,6 +23,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,106 +45,107 @@ import java.io.ByteArrayInputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
-// ── Ad keywords in host ──
-private val AD_HOST_KEYWORDS = listOf(
-    "doubleclick", "googlesyndication", "googleadservices", "google-analytics",
-    "googletagmanager", "googletagservices", "adservice",
-    "adserv", "adtrack", "advert", "adsystem", "adserver", "adnetwork",
-    "popunder", "popcash", "popads", "propeller",
-    "trafficjunky", "exoclick", "juicyads", "clickadu", "hilltopads",
-    "monetag", "adsterra", "pushame", "pushengage", "richpush",
-    "taboola", "outbrain", "mgid", "revcontent",
-    "criteo", "moatads", "quantserve", "scorecardresearch",
-    "pubmatic", "openx", "rubiconproject", "smartadserver",
-    "casalemedia", "contextweb", "sharethrough",
-    "mopub", "applovin", "vungle", "chartboost", "inmobi",
-    "startapp", "leadbolt", "smaato", "tapjoy", "admob",
-    "bidvertiser", "adcolony", "adform", "serving-sys",
-    "tsyndicate", "setupad", "ezoic", "adthrive", "mediavine",
-    "snigel", "sovrn", "teads", "spotx", "connatix", "vidoomy",
-    "adtelligent", "flashtalking", "doubleverify", "adsafeprotected",
-    "amazon-adsystem", "media.net", "bluekai",
-    "hotjar", "fullstory", "crazyegg", "mouseflow", "luckyorange",
-    "mixpanel", "onesignal", "cleverpush", "webpushr", "gravitec",
-    "izooto", "sendpulse", "pushwoosh", "pushnami",
-    "exosrv", "plugrush", "zedo", "disqusads",
-    "kiosked", "springserve", "cedato"
+// ── Specific known ad networks & tracking domains for sub-resource filtering only ──
+private val KNOWN_AD_DOMAINS = listOf(
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+    "adsterra.com", "monetag.com", "propellerads.com", "highcpmgate.com",
+    "effectivecpmgate.com", "alwingulla.com", "thoufaud.com", "onclickalgo.com",
+    "poawoopt.com", "asewt.com", "wpadmngr.com", "exoclick.com", "trafficjunky.com",
+    "clickadu.com", "hilltopads.com", "popads.net", "popcash.net", "admaven.com",
+    "richpush.com", "notix.co", "pushame.com", "pushengage.com"
 )
 
-private val AD_PATH_KEYWORDS = listOf(
-    "/ads/", "/ad/", "/adserv", "/banner/", "/popup",
-    "/pagead/", "/aclk?", "google_ads", "amazon_ads", "prebid", "adsense"
-)
-
-// Trusted download sites where ad blocking should be disabled
-private val TRUSTED_DOWNLOAD_HOSTS = listOf(
-    "mega.nz", "mega.co.nz", "mega.io",
-    "pixeldrain.com",
-    "drive.google.com", "docs.google.com",
-    "mediafire.com", "www.mediafire.com",
-    "terabox.com", "www.terabox.com",
-    "pcloud.link", "www.pcloud.com",
-    "youtube.com", "www.youtube.com"
-)
-
-private fun isTrustedSite(url: String): Boolean {
+private fun isKnownAdHost(url: String): Boolean {
     val host = try { java.net.URI(url.lowercase()).host ?: "" } catch (_: Exception) { "" }
-    return TRUSTED_DOWNLOAD_HOSTS.any { host.contains(it) }
+    return KNOWN_AD_DOMAINS.any { host == it || host.endsWith(".$it") }
 }
 
-private fun isAdUrl(url: String): Boolean {
-    val lower = url.lowercase()
-    val host = try { java.net.URI(lower).host ?: "" } catch (e: Exception) { lower }
-    for (keyword in AD_HOST_KEYWORDS) { if (host.contains(keyword)) return true }
-    for (keyword in AD_PATH_KEYWORDS) { if (lower.contains(keyword)) return true }
-    return false
+// Check ONLY genuine direct media, archive, and apk file streams
+private fun isDirectDownloadUrl(url: String): Boolean {
+    val cleanUrl = url.substringBefore("?").substringBefore("#").lowercase()
+    val fullLower = url.lowercase()
+
+    // 1. Direct file stream endpoints
+    if (fullLower.contains("drive.google.com/uc?") && fullLower.contains("export=download")) return true
+    if (fullLower.contains("docs.google.com/uc?") && fullLower.contains("export=download")) return true
+    if (fullLower.contains("pixeldrain.com/api/file/")) return true
+
+    // 2. Direct file extensions on URL path
+    val mediaExtensions = listOf(
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".flv",
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".apk", ".iso", ".srt"
+    )
+    return mediaExtensions.any { cleanUrl.endsWith(it) }
 }
 
 private val EMPTY_RESPONSE = WebResourceResponse(
     "text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0))
 )
 
-private const val AD_HIDE_JS = """
+// Smart JS to remove full-screen invisible clickjack overlays, convert target="_blank" to direct links, and route window.open cleanly
+private const val ANTI_CLICKJACK_JS = """
 (function() {
-    var style = document.createElement('style');
-    style.textContent = `
-        [class*="ad-"], [class*="ads-"], [class*="adsbygoogle"],
-        [class*="ad_"], [class*="ads_"], [class*="advert"],
-        [id*="ad-"], [id*="ads-"], [id*="google_ads"], [id*="ad_"],
-        iframe[src*="ads"], iframe[src*="doubleclick"],
-        iframe[src*="googlesyndication"], iframe[src*="adserv"],
-        iframe[src*="exoclick"], iframe[src*="monetag"],
-        ins.adsbygoogle, .adsbygoogle,
-        .ad-container, .ad-wrapper, .ad-banner, .ad-unit, .ad-slot,
-        .ad-overlay, .ad-popup, .ad-interstitial,
-        [data-ad], [data-ads], [data-ad-slot],
-        div[class*="push-notification"], div[id*="push-notification"]
-        { display: none !important; height: 0 !important; width: 0 !important; overflow: hidden !important; }
-        body { overflow: auto !important; }
-    `;
-    document.head.appendChild(style);
-    document.querySelectorAll('iframe').forEach(function(el) {
-        var src = (el.src || '').toLowerCase();
-        if (src.includes('ad') || src.includes('doubleclick') || src.includes('syndication') ||
-            src.includes('exoclick') || src.includes('monetag') || src.includes('propeller')) {
-            el.remove();
-        }
-    });
-    window.open = function() { return null; };
     window.onbeforeunload = null;
+    
+    // Convert all target="_blank" and target="_new" so the new download site opens right inside this WebView!
+    function fixLinksAndWindows() {
+        var links = document.querySelectorAll('a[target="_blank"], a[target="_new"]');
+        links.forEach(function(link) {
+            link.setAttribute('target', '_self');
+        });
+    }
+
+    // Intercept window.open so JS click handlers (like Instant DL) navigate smoothly in current window
+    window.open = function(url, target, features) {
+        if (url && typeof url === 'string') {
+            window.location.href = url;
+        }
+        return window;
+    };
+    
+    // Remove only transparent invisible clickjack layers (do NOT hide real buttons!)
+    function removeOverlays() {
+        var elements = document.querySelectorAll('div, a, iframe, span, section');
+        elements.forEach(function(el) {
+            var style = window.getComputedStyle(el);
+            if ((style.position === 'fixed' || style.position === 'absolute') && 
+                (parseInt(style.zIndex) > 1000 || style.zIndex === '999999' || style.zIndex === '2147483647')) {
+                var w = el.offsetWidth;
+                var h = el.offsetHeight;
+                if (w > window.innerWidth * 0.8 && h > window.innerHeight * 0.8) {
+                    if (parseFloat(style.opacity) < 0.1 || style.backgroundColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
+                        el.remove();
+                    }
+                }
+            }
+        });
+    }
+    
+    setInterval(function() {
+        fixLinksAndWindows();
+        removeOverlays();
+    }, 500);
+    
+    fixLinksAndWindows();
+    removeOverlays();
 })();
 """
 
 // ── Helper: start download using system DownloadManager directly ──
 private fun startSystemDownload(context: Context, downloadUrl: String, fileName: String, title: String) {
     try {
+        // Prevent downloading garbage .bin files
+        var safeFileName = fileName
+        if (safeFileName.endsWith(".bin") || safeFileName.isBlank()) {
+            safeFileName = "video_${System.currentTimeMillis()}.mp4"
+        }
+
         val settings = SettingsRepository(context)
         if (settings.sdCardUri != null) {
             // Use custom download service for SAF SD Card downloads
-            DownloadService.start(context, downloadUrl, fileName, title)
+            DownloadService.start(context, downloadUrl, safeFileName, title)
             Toast.makeText(context, "Download started to SD Card: $title", Toast.LENGTH_SHORT).show()
             
-            // Save dummy record so it appears in history (we use -1 for downloadManagerId since we bypass it)
             val repo = DownloadRepository(context)
             repo.saveDownloadRecord(-1L, title, downloadUrl)
             return
@@ -153,16 +156,16 @@ private fun startSystemDownload(context: Context, downloadUrl: String, fileName:
             setTitle(title)
             setDescription("Downloading via NexiPlay")
             addRequestHeader("Cookie", cookie ?: "")
-            addRequestHeader("User-Agent", WebView(context).settings.userAgentString)
+            addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+            addRequestHeader("Referer", downloadUrl)
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "NexiPlay/$fileName")
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "NexiPlay/$safeFileName")
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
         }
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = dm.enqueue(request)
 
-        // Save to our download history
         val repo = DownloadRepository(context)
         repo.saveDownloadRecord(downloadId, title, downloadUrl)
 
@@ -177,7 +180,8 @@ private fun startSystemDownload(context: Context, downloadUrl: String, fileName:
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WebViewScreen(navController: NavController, encodedUrl: String) {
-    val url = remember { URLDecoder.decode(encodedUrl, StandardCharsets.UTF_8.toString()) }
+    val initialUrl = remember { URLDecoder.decode(encodedUrl, StandardCharsets.UTF_8.toString()) }
+    var currentUrl by remember { mutableStateOf(initialUrl) }
     var pageTitle by remember { mutableStateOf("Loading...") }
     var isLoading by remember { mutableStateOf(true) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -190,9 +194,7 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
     // ── Permission launcher ──
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        // Whether granted or not, try the download anyway
-        // DownloadManager works without WRITE_EXTERNAL_STORAGE on Android 10+
+    ) { _ ->
         val dlUrl = pendingDownloadUrl
         val dlName = pendingDownloadName
         if (dlUrl != null && dlName != null) {
@@ -206,7 +208,6 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
     fun downloadWithPermission(downloadUrl: String, fileName: String) {
         val permissionsNeeded = mutableListOf<String>()
 
-        // Notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -214,7 +215,6 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
             }
         }
 
-        // Storage permission for Android 9 and below
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -231,6 +231,17 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
         }
     }
 
+    // Helper to route new window URLs into download or navigation
+    fun handleNewWindowUrl(mainView: WebView?, targetUrl: String) {
+        if (mainView == null || targetUrl.isBlank()) return
+        if (isDirectDownloadUrl(targetUrl)) {
+            val fileName = URLUtil.guessFileName(targetUrl, null, null)
+            downloadWithPermission(targetUrl, fileName)
+        } else {
+            mainView.loadUrl(targetUrl)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -239,6 +250,19 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                     IconButton(onClick = {
                         val wv = webViewRef.value
                         if (wv != null && wv.canGoBack()) {
+                            val list = wv.copyBackForwardList()
+                            val currentIndex = list.currentIndex
+                            var targetIndex = currentIndex - 1
+                            while (targetIndex >= 0) {
+                                val item = list.getItemAtIndex(targetIndex)
+                                val itemUrl = item.url.lowercase()
+                                if (!isKnownAdHost(itemUrl)) {
+                                    val steps = targetIndex - currentIndex
+                                    wv.goBackOrForward(steps)
+                                    return@IconButton
+                                }
+                                targetIndex--
+                            }
                             wv.goBack()
                         } else {
                             navController.popBackStack()
@@ -248,6 +272,20 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                     }
                 },
                 actions = {
+                    // Open in Chrome browser fallback button
+                    IconButton(onClick = {
+                        val activeUrl = webViewRef.value?.url ?: currentUrl
+                        try {
+                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(activeUrl))
+                            context.startActivity(browserIntent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Cannot open browser: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Icon(Icons.Default.OpenInBrowser, "Open in Chrome", tint = themeTextPrimary())
+                    }
+
+                    // Reload button
                     IconButton(onClick = { webViewRef.value?.reload() }) {
                         Icon(Icons.Default.Refresh, "Reload", tint = themeTextPrimary())
                     }
@@ -261,36 +299,82 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        val isTrusted = isTrustedSite(url)
-                        
+                        // Accept cookies & 3rd-party cookies for GDrive download verification
+                        val cookieManager = CookieManager.getInstance()
+                        cookieManager.setAcceptCookie(true)
+                        cookieManager.setAcceptThirdPartyCookies(this, true)
+
                         webViewClient = object : WebViewClient() {
                             override fun shouldInterceptRequest(
                                 view: WebView?, request: WebResourceRequest?
                             ): WebResourceResponse? {
-                                if (isTrusted) return super.shouldInterceptRequest(view, request)
                                 val requestUrl = request?.url?.toString() ?: return null
-                                if (isAdUrl(requestUrl)) return EMPTY_RESPONSE
+                                // ONLY block 3rd-party ad scripts/iframes, NEVER block the main page!
+                                if (request.isForMainFrame == false && isKnownAdHost(requestUrl)) {
+                                    return EMPTY_RESPONSE
+                                }
                                 return super.shouldInterceptRequest(view, request)
                             }
 
                             override fun onPageStarted(view: WebView?, loadUrl: String?, favicon: Bitmap?) {
                                 super.onPageStarted(view, loadUrl, favicon)
                                 isLoading = true
+                                if (loadUrl != null) currentUrl = loadUrl
                             }
 
                             override fun onPageFinished(view: WebView?, loadUrl: String?) {
                                 super.onPageFinished(view, loadUrl)
                                 isLoading = false
-                                if (!isTrusted) {
-                                    view?.evaluateJavascript(AD_HIDE_JS, null)
-                                }
+                                if (loadUrl != null) currentUrl = loadUrl
+                                view?.evaluateJavascript(ANTI_CLICKJACK_JS, null)
                             }
 
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?, request: WebResourceRequest?
                             ): Boolean {
                                 val reqUrl = request?.url?.toString() ?: return false
-                                if (!isTrusted && isAdUrl(reqUrl)) return true
+
+                                // Intercept ONLY genuine direct media/archive files
+                                if (isDirectDownloadUrl(reqUrl)) {
+                                    var fileName = URLUtil.guessFileName(reqUrl, null, null)
+                                    if (fileName.endsWith(".bin") || fileName.isBlank()) {
+                                        fileName = "video_${System.currentTimeMillis()}.mp4"
+                                    }
+                                    downloadWithPermission(reqUrl, fileName)
+                                    return true
+                                }
+
+                                // Handle intent:// without throwing out to Chrome
+                                if (reqUrl.startsWith("intent://")) {
+                                    try {
+                                        val intent = Intent.parseUri(reqUrl, Intent.URI_INTENT_SCHEME)
+                                        if (intent != null) {
+                                            val fallbackUrl = intent.getStringExtra("browser_fallback_url")
+                                            if (fallbackUrl != null) {
+                                                view?.loadUrl(fallbackUrl)
+                                                return true
+                                            }
+                                        }
+                                    } catch (_: Exception) {}
+                                    return true // Block external launch to Chrome
+                                }
+
+                                // Block market:// or play.google.com from ad redirects
+                                if (reqUrl.startsWith("market://") || reqUrl.lowercase().contains("play.google.com/store")) {
+                                    return true
+                                }
+
+                                // For standard non-http custom schemes (e.g. tg://, vlc://)
+                                if (!reqUrl.startsWith("http://") && !reqUrl.startsWith("https://") &&
+                                    !reqUrl.startsWith("about:") && !reqUrl.startsWith("javascript:")) {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(reqUrl))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                    return true
+                                }
+
+                                // ALLOW all normal webpage navigations so Instant DL target sites load cleanly!
                                 return false
                             }
                         }
@@ -306,40 +390,62 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                                 isUserGesture: Boolean, resultMsg: android.os.Message?
                             ): Boolean {
                                 if (view == null) return false
-                                // Extract href from the clicked element
-                                val result = view.hitTestResult
-                                val data = result.extra
-                                if (data != null && !isAdUrl(data)) {
-                                    view.loadUrl(data)
+
+                                // Check hit test result directly for immediate click handling
+                                val hitResult = view.hitTestResult
+                                val hitUrl = hitResult.extra
+                                if (!hitUrl.isNullOrBlank()) {
+                                    handleNewWindowUrl(view, hitUrl)
+                                    return false
                                 }
-                                // Also handle via transport
-                                val tempWebView = WebView(view.context)
+
+                                // Temporary WebView to resolve dynamic JavaScript target URL safely
+                                val tempWebView = WebView(view.context).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.userAgentString = view.settings.userAgentString
+                                }
+
                                 tempWebView.webViewClient = object : WebViewClient() {
                                     override fun shouldOverrideUrlLoading(
                                         v: WebView?, request: WebResourceRequest?
                                     ): Boolean {
-                                        val newUrl = request?.url?.toString() ?: return false
-                                        if (!isAdUrl(newUrl)) {
-                                            view.loadUrl(newUrl)
-                                        }
+                                        val targetUrl = request?.url?.toString() ?: return false
+                                        handleNewWindowUrl(view, targetUrl)
                                         try { tempWebView.destroy() } catch (_: Exception) {}
                                         return true
                                     }
+
+                                    override fun onPageStarted(v: WebView?, targetUrl: String?, favicon: Bitmap?) {
+                                        super.onPageStarted(v, targetUrl, favicon)
+                                        if (!targetUrl.isNullOrBlank() && targetUrl != "about:blank") {
+                                            handleNewWindowUrl(view, targetUrl)
+                                            try { tempWebView.destroy() } catch (_: Exception) {}
+                                        }
+                                    }
                                 }
+
                                 tempWebView.setDownloadListener { dlUrl, _, cd, mime, _ ->
-                                    val name = URLUtil.guessFileName(dlUrl, cd, mime)
+                                    var name = URLUtil.guessFileName(dlUrl, cd, mime)
+                                    if (name.endsWith(".bin") || name.isBlank()) {
+                                        name = "video_${System.currentTimeMillis()}.mp4"
+                                    }
                                     downloadWithPermission(dlUrl, name)
                                     try { tempWebView.destroy() } catch (_: Exception) {}
                                 }
-                                val transport = resultMsg?.obj as? android.webkit.WebView.WebViewTransport
+
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport
                                 transport?.webView = tempWebView
                                 resultMsg?.sendToTarget()
                                 return true
                             }
                         }
 
+                        // Use modern mobile Chrome User-Agent for seamless GDrive & Cloudflare compatibility
+                        settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
                         settings.setSupportMultipleWindows(true)
@@ -351,13 +457,16 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                         settings.allowFileAccess = true
                         settings.allowContentAccess = true
 
-                        // Main download listener
+                        // Main download listener for server-sent attachments
                         setDownloadListener { dlUrl, userAgent, contentDisposition, mimeType, _ ->
-                            val fileName = URLUtil.guessFileName(dlUrl, contentDisposition, mimeType)
+                            var fileName = URLUtil.guessFileName(dlUrl, contentDisposition, mimeType)
+                            if (fileName.endsWith(".bin") || fileName.isBlank()) {
+                                fileName = "video_${System.currentTimeMillis()}.mp4"
+                            }
                             downloadWithPermission(dlUrl, fileName)
                         }
 
-                        loadUrl(url)
+                        loadUrl(initialUrl)
                         webViewRef.value = this
                     }
                 },
@@ -374,10 +483,23 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
         }
     }
 
-    // System back button
+    // Chrome-like Back Button Navigation: skips any ad redirect loops and takes user straight back to previous download page
     androidx.activity.compose.BackHandler(enabled = true) {
         val wv = webViewRef.value
         if (wv != null && wv.canGoBack()) {
+            val list = wv.copyBackForwardList()
+            val currentIndex = list.currentIndex
+            var targetIndex = currentIndex - 1
+            while (targetIndex >= 0) {
+                val item = list.getItemAtIndex(targetIndex)
+                val itemUrl = item.url.lowercase()
+                if (!isKnownAdHost(itemUrl)) {
+                    val steps = targetIndex - currentIndex
+                    wv.goBackOrForward(steps)
+                    return@BackHandler
+                }
+                targetIndex--
+            }
             wv.goBack()
         } else {
             navController.popBackStack()

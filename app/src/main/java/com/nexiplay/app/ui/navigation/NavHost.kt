@@ -27,6 +27,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -45,8 +47,12 @@ import androidx.navigation.navArgument
 import com.nexiplay.app.ui.theme.*
 import com.nexiplay.app.ui.components.bounceClick
 import com.nexiplay.app.ui.components.GlobalNoticeManager
+import com.nexiplay.app.ui.components.UpdateDialog
 import com.nexiplay.app.ui.viewmodels.GlobalNoticeViewModel
+import com.nexiplay.app.data.util.AppUpdateManager
+import com.nexiplay.app.data.util.AppUpdateInfo
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.runtime.collectAsState
 import com.nexiplay.app.ui.screens.home.HomeScreen
 import com.nexiplay.app.ui.screens.browse.BrowseScreen
 import com.nexiplay.app.ui.screens.novels.NovelsScreen
@@ -96,8 +102,54 @@ fun NexiPlayNavHost() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = currentRoute in bottomNavRoutes
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val noticeVm: GlobalNoticeViewModel = viewModel()
+
+    // ── In-App Update System ──
+    val appUpdateInfo by AppUpdateManager.updateInfo.collectAsState()
+    var showUpdateDialog by remember { mutableStateOf(false) }
+
+    // Check for update on first launch
+    LaunchedEffect(Unit) {
+        AppUpdateManager.checkForUpdate()
+    }
+
+    // Re-check update when app comes back to foreground (e.g., after granting install permission)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                // If update dialog was showing and user left to grant permission, re-trigger
+                if (AppUpdateManager.isUpdateAvailable && AppUpdateManager.shouldShowUpdate(context)) {
+                    showUpdateDialog = true
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Show dialog only if update is available AND user hasn't dismissed this version
+    LaunchedEffect(appUpdateInfo) {
+        if (AppUpdateManager.shouldShowUpdate(context)) {
+            showUpdateDialog = true
+        }
+    }
+
+    // Update Dialog
+    if (showUpdateDialog && appUpdateInfo != null) {
+        UpdateDialog(
+            updateInfo = appUpdateInfo!!,
+            onDismiss = {
+                if (!AppUpdateManager.isForceUpdate) {
+                    showUpdateDialog = false
+                    AppUpdateManager.dismissUpdatePermanently(context)
+                    AppUpdateManager.resetState()
+                }
+            }
+        )
+    }
 
     var showUpsellPopup by remember { mutableStateOf(false) }
     var upsellTitle by remember { mutableStateOf("") }
@@ -205,154 +257,203 @@ fun NexiPlayNavHost() {
                     }
                 }
             }
-        }
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Splash.route,
-            modifier = Modifier.padding(innerPadding),
-            enterTransition = {
-                slideInHorizontally(
-                    initialOffsetX = { fullWidth -> (fullWidth * 0.15).toInt() },
-                    animationSpec = tween(280),
-                ) + fadeIn(tween(280))
-            },
-            exitTransition = {
-                slideOutHorizontally(
-                    targetOffsetX = { fullWidth -> -(fullWidth * 0.08).toInt() },
-                    animationSpec = tween(280),
-                ) + fadeOut(tween(200))
-            },
-            popEnterTransition = {
-                slideInHorizontally(
-                    initialOffsetX = { fullWidth -> -(fullWidth * 0.15).toInt() },
-                    animationSpec = tween(280),
-                ) + fadeIn(tween(280))
-            },
-            popExitTransition = {
-                slideOutHorizontally(
-                    targetOffsetX = { fullWidth -> (fullWidth * 0.08).toInt() },
-                    animationSpec = tween(280),
-                ) + fadeOut(tween(200))
-            },
-        ) {
-            // ── Splash Screen ──
-            composable(Screen.Splash.route) { SplashScreen(navController) }
+        },
+            floatingActionButton = {
+                if (showBottomBar) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(bottom = 4.dp, end = 4.dp)
+                    ) {
+                        // Tooltip badge
+                        Box(
+                            modifier = Modifier
+                                .background(Color.White, RoundedCornerShape(16.dp))
+                                .border(0.5.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                "Need help? Chat with me! 💬",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E1E2E),
+                                fontFamily = InterFont
+                            )
+                        }
 
-            // ── Bottom Nav Tabs ──
-            composable(Screen.Home.route) { HomeScreen(navController) }
-            composable(Screen.Browse.route) { BrowseScreen(navController) }
-            composable(Screen.Novels.route) { NovelsScreen(navController) }
-            composable(Screen.Coins.route) { CoinCenterScreen(navController) }
-            composable(Screen.Profile.route) { ProfileScreen(navController) }
-
-            // ── Auth ──
-            composable(Screen.Login.route) { LoginScreen(navController) }
-            composable(Screen.Register.route) { RegisterScreen(navController) }
-
-            // ── Search ──
-            composable(Screen.Search.route) { SearchScreen(navController) }
-
-            // ── Web View ──
-            composable(
-                route = "webview/{url}",
-                arguments = listOf(navArgument("url") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val encodedUrl = backStackEntry.arguments?.getString("url") ?: ""
-                WebViewScreen(navController, encodedUrl)
+                        // FAB Button
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .bounceClick { navController.navigate(Screen.Chatbot.route) }
+                                .background(
+                                    brush = Brush.linearGradient(
+                                        colors = listOf(NexiRed, NexiRedDark)
+                                    ),
+                                    shape = CircleShape
+                                )
+                                .border(1.5.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChatBubble,
+                                contentDescription = "AI Chatbot",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            // Online Green Pulse Indicator
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .align(Alignment.TopEnd)
+                                    .background(SuccessGreen, CircleShape)
+                                    .border(1.5.dp, NexiRedDark, CircleShape)
+                            )
+                        }
+                    }
+                }
             }
+        ) { innerPadding ->
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Splash.route,
+                modifier = Modifier.padding(innerPadding),
+                enterTransition = {
+                    slideInHorizontally(
+                        initialOffsetX = { fullWidth -> (fullWidth * 0.15).toInt() },
+                        animationSpec = tween(280),
+                    ) + fadeIn(tween(280))
+                },
+                exitTransition = {
+                    slideOutHorizontally(
+                        targetOffsetX = { fullWidth -> -(fullWidth * 0.08).toInt() },
+                        animationSpec = tween(280),
+                    ) + fadeOut(tween(200))
+                },
+                popEnterTransition = {
+                    slideInHorizontally(
+                        initialOffsetX = { fullWidth -> -(fullWidth * 0.15).toInt() },
+                        animationSpec = tween(280),
+                    ) + fadeIn(tween(280))
+                },
+                popExitTransition = {
+                    slideOutHorizontally(
+                        targetOffsetX = { fullWidth -> (fullWidth * 0.08).toInt() },
+                        animationSpec = tween(280),
+                    ) + fadeOut(tween(200))
+                },
+            ) {
+                // ── Splash Screen ──
+                composable(Screen.Splash.route) { SplashScreen(navController) }
 
-            // ── Content Detail ──
-            composable(
-                route = Screen.ContentDetail.route,
-                arguments = listOf(
-                    navArgument("type") { type = NavType.StringType },
-                    navArgument("slug") { type = NavType.StringType },
-                ),
-            ) { backStackEntry ->
-                val type = backStackEntry.arguments?.getString("type") ?: ""
-                val slug = backStackEntry.arguments?.getString("slug") ?: ""
-                ContentDetailScreen(navController, type, slug)
+                // ── Bottom Nav Tabs ──
+                composable(Screen.Home.route) { HomeScreen(navController) }
+                composable(Screen.Browse.route) { BrowseScreen(navController) }
+                composable(Screen.Novels.route) { NovelsScreen(navController) }
+                composable(Screen.Coins.route) { CoinCenterScreen(navController) }
+                composable(Screen.Profile.route) { ProfileScreen(navController) }
+
+                // ── Auth ──
+                composable(Screen.Login.route) { LoginScreen(navController) }
+                composable(Screen.Register.route) { RegisterScreen(navController) }
+
+                // ── Search ──
+                composable(Screen.Search.route) { SearchScreen(navController) }
+
+                // ── Web View ──
+                composable(
+                    route = "webview/{url}",
+                    arguments = listOf(navArgument("url") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val encodedUrl = backStackEntry.arguments?.getString("url") ?: ""
+                    WebViewScreen(navController, encodedUrl)
+                }
+
+                // ── Content Detail ──
+                composable(
+                    route = Screen.ContentDetail.route,
+                    arguments = listOf(
+                        navArgument("type") { type = NavType.StringType },
+                        navArgument("slug") { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val type = backStackEntry.arguments?.getString("type") ?: ""
+                    val slug = backStackEntry.arguments?.getString("slug") ?: ""
+                    ContentDetailScreen(navController, type, slug)
+                }
+
+                // ── Watch Screen ──
+                composable(
+                    route = "watch/{type}/{slug}",
+                    arguments = listOf(
+                        navArgument("type") { type = NavType.StringType },
+                        navArgument("slug") { type = NavType.StringType }
+                    ),
+                ) { backStackEntry ->
+                    val type = backStackEntry.arguments?.getString("type") ?: ""
+                    val slug = backStackEntry.arguments?.getString("slug") ?: ""
+                    com.nexiplay.app.ui.screens.detail.WatchScreen(navController, type, slug)
+                }
+
+                // ── Novel Detail ──
+                composable(
+                    route = Screen.NovelDetail.route,
+                    arguments = listOf(navArgument("slug") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val slug = backStackEntry.arguments?.getString("slug") ?: ""
+                    NovelDetailScreen(navController, slug)
+                }
+
+                // ── Novel Reader ──
+                composable(
+                    route = "novel_reader/{novelId}/{chapterNumber}",
+                    arguments = listOf(
+                        navArgument("novelId") { type = NavType.StringType },
+                        navArgument("chapterNumber") { type = NavType.IntType },
+                    ),
+                ) { backStackEntry ->
+                    val novelId = backStackEntry.arguments?.getString("novelId") ?: ""
+                    val chapterNum = backStackEntry.arguments?.getInt("chapterNumber") ?: 1
+                    NovelReaderScreen(navController, novelId, chapterNum)
+                }
+
+                // ── Settings ──
+                composable(Screen.Settings.route) { SettingsScreen(navController) }
+
+                // ── Notifications ──
+                composable(Screen.Notifications.route) { NotificationsScreen(navController) }
+
+                // ── Watchlist ──
+                composable(Screen.Watchlist.route) { WatchlistScreen(navController) }
+
+                // ── Request Content ──
+                composable(Screen.RequestContent.route) { RequestContentScreen(navController) }
+
+                // ── Contact Us ──
+                composable(Screen.Contact.route) { ContactScreen(navController) }
+
+                // ── Player Screen ──
+                composable(
+                    route = "player/{url}",
+                    arguments = listOf(navArgument("url") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val url = backStackEntry.arguments?.getString("url") ?: ""
+                    PlayerScreen(navController, url)
+                }
+                
+                // ── History & Comments ──
+                composable("history") { HistoryScreen(navController) }
+                composable("comments") { CommentsScreen(navController) }
+
+                // ── Downloads Screen ──
+                composable("downloads") { DownloadsScreen(navController) }
+
+                // ── Leaderboard ──
+                composable(Screen.Leaderboard.route) { com.nexiplay.app.ui.screens.leaderboard.LeaderboardScreen(navController) }
+
+                // ── AI Chatbot ──
+                composable(Screen.Chatbot.route) { com.nexiplay.app.ui.screens.chatbot.ChatbotScreen(navController) }
             }
-
-            // ── Watch Screen ──
-            composable(
-                route = "watch/{type}/{slug}",
-                arguments = listOf(
-                    navArgument("type") { type = NavType.StringType },
-                    navArgument("slug") { type = NavType.StringType }
-                ),
-            ) { backStackEntry ->
-                val type = backStackEntry.arguments?.getString("type") ?: ""
-                val slug = backStackEntry.arguments?.getString("slug") ?: ""
-                com.nexiplay.app.ui.screens.detail.WatchScreen(navController, type, slug)
-            }
-
-            // ── Novel Detail ──
-            composable(
-                route = Screen.NovelDetail.route,
-                arguments = listOf(navArgument("slug") { type = NavType.StringType }),
-            ) { backStackEntry ->
-                val slug = backStackEntry.arguments?.getString("slug") ?: ""
-                NovelDetailScreen(navController, slug)
-            }
-
-            // ── Novel Reader ──
-            composable(
-                route = "novel_reader/{novelId}/{chapterNumber}",
-                arguments = listOf(
-                    navArgument("novelId") { type = NavType.StringType },
-                    navArgument("chapterNumber") { type = NavType.IntType },
-                ),
-            ) { backStackEntry ->
-                val novelId = backStackEntry.arguments?.getString("novelId") ?: ""
-                val chapterNum = backStackEntry.arguments?.getInt("chapterNumber") ?: 1
-                NovelReaderScreen(navController, novelId, chapterNum)
-            }
-
-            // ── Settings ──
-            composable(Screen.Settings.route) { SettingsScreen(navController) }
-
-            // ── Notifications ──
-            composable(Screen.Notifications.route) { NotificationsScreen(navController) }
-
-            // ── Watchlist ──
-            composable(Screen.Watchlist.route) { WatchlistScreen(navController) }
-
-            // ── Request Content ──
-            composable(Screen.RequestContent.route) { RequestContentScreen(navController) }
-
-            // ── Contact Us ──
-            composable(Screen.Contact.route) { ContactScreen(navController) }
-
-            // ── Player Screen ──
-            composable(
-                route = "player/{url}",
-                arguments = listOf(navArgument("url") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val url = backStackEntry.arguments?.getString("url") ?: ""
-                PlayerScreen(navController, url)
-            }
-
-            // ── WebView ──
-            composable(
-                route = "webview/{url}",
-                arguments = listOf(navArgument("url") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val encodedUrl = backStackEntry.arguments?.getString("url") ?: ""
-                WebViewScreen(navController, encodedUrl)
-            }
-            
-            // ── History & Comments ──
-            composable("history") { HistoryScreen(navController) }
-            composable("comments") { CommentsScreen(navController) }
-
-            // ── Downloads Screen ──
-            composable("downloads") { DownloadsScreen(navController) }
-
-            // ── Leaderboard ──
-            composable(Screen.Leaderboard.route) { com.nexiplay.app.ui.screens.leaderboard.LeaderboardScreen(navController) }
         }
     }
-    } // Close GlobalNoticeManager
 }

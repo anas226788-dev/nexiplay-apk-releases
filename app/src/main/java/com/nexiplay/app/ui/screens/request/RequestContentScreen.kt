@@ -159,15 +159,19 @@ fun RequestContentScreen(navController: NavController) {
                                     return@launch
                                 }
                                 try {
-                                    SupabaseClient.main.from("content_requests").insert(
-                                        mapOf(
-                                            "user_id" to user.id,
-                                            "title" to title.trim(),
-                                            "type" to selectedType,
-                                            "notes" to notes.trim().ifEmpty { null },
-                                            "status" to "pending",
-                                        )
+                                    val userMetadata = mapOf(
+                                        "user_id" to user.id,
+                                        "user_email" to user.email,
+                                        "type" to selectedType,
+                                        "notes" to notes.trim().ifEmpty { null },
+                                        "source" to "android_app"
                                     )
+                                    val insertMap = mapOf(
+                                        "content_name" to title.trim(),
+                                        "status" to "pending",
+                                        "scraped_data" to userMetadata
+                                    )
+                                    SupabaseClient.main.from("content_requests").insert(insertMap)
                                     submitted = true
                                 } catch (e: Exception) {
                                     error = e.message ?: "Failed to submit"

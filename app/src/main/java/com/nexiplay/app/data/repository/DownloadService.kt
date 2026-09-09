@@ -46,6 +46,12 @@ class DownloadService : Service() {
         }
     }
 
+    private val appIconBitmap: android.graphics.Bitmap? by lazy {
+        try {
+            android.graphics.BitmapFactory.decodeResource(resources, com.nexiplay.app.R.mipmap.ic_launcher)
+        } catch (_: Exception) { null }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -68,11 +74,13 @@ class DownloadService : Service() {
             val title = intent.getStringExtra(EXTRA_TITLE) ?: "Downloading"
 
             val notificationId = url.hashCode()
-            
+
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText("Downloading...")
-                .setSmallIcon(com.nexiplay.app.R.mipmap.ic_launcher)
+                .setSmallIcon(com.nexiplay.app.R.drawable.ic_stat_onesignal_default)
+                .apply { if (appIconBitmap != null) setLargeIcon(appIconBitmap) }
+                .setColor(0xFFDC2626.toInt())
                 .setProgress(100, 0, true)
                 .build()
 
@@ -155,7 +163,9 @@ class DownloadService : Service() {
                     val notif = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                         .setContentTitle(title)
                         .setContentText("Downloading... $progress%")
-                        .setSmallIcon(com.nexiplay.app.R.mipmap.ic_launcher)
+                        .setSmallIcon(com.nexiplay.app.R.drawable.ic_stat_onesignal_default)
+                        .apply { if (appIconBitmap != null) setLargeIcon(appIconBitmap) }
+                        .setColor(0xFFDC2626.toInt())
                         .setProgress(100, progress, totalBytes <= 0)
                         .build()
                     nm.notify(notificationId, notif)
@@ -172,7 +182,9 @@ class DownloadService : Service() {
             val notif = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText("Download Complete")
-                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setSmallIcon(com.nexiplay.app.R.drawable.ic_stat_onesignal_default)
+                .apply { if (appIconBitmap != null) setLargeIcon(appIconBitmap) }
+                .setColor(0xFF10B981.toInt())
                 .build()
             nm.notify(notificationId, notif)
 
@@ -182,7 +194,9 @@ class DownloadService : Service() {
             val notif = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText("Download Failed")
-                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setSmallIcon(com.nexiplay.app.R.drawable.ic_stat_onesignal_default)
+                .apply { if (appIconBitmap != null) setLargeIcon(appIconBitmap) }
+                .setColor(0xFFEF4444.toInt())
                 .build()
             nm.notify(notificationId, notif)
         } finally {

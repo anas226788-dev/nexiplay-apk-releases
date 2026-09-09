@@ -15,8 +15,8 @@ android {
         applicationId = "com.nexiplay.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.0.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -94,6 +94,8 @@ dependencies {
     // ── Ad Networks (Unity LevelPlay & Start.io) ──
     implementation("com.startapp:inapp-sdk:5.1.0")
     implementation("com.ironsource.sdk:mediationsdk:8.6.0")
+    implementation("com.ironsource.adapters:unityadsadapter:4.3.43")
+    implementation("com.unity3d.ads:unity-ads:4.12.2")
     implementation("com.google.android.gms:play-services-appset:16.0.2")
     implementation("com.google.android.gms:play-services-ads-identifier:18.0.1")
 

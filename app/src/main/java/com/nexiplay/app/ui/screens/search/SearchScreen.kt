@@ -242,7 +242,7 @@ fun SearchScreen(navController: NavController) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    items(results) { movie ->
+                    items(results, key = { it.id }) { movie ->
                         MovieCardGrid(
                             movie = movie,
                             onClick = { navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug)) }

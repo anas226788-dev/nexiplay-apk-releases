@@ -141,7 +141,7 @@ fun HistoryScreen(navController: NavController) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(history) { event ->
+                items(history, key = { it.id ?: it.hashCode() }) { event ->
                     HistoryItem(
                         event = event,
                         onClick = {

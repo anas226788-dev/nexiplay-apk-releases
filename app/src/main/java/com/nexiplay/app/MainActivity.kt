@@ -23,6 +23,10 @@ class MainActivity : ComponentActivity() {
         
         com.nexiplay.app.data.util.AdManager.syncAdFreeStatus(this)
         
+        // Register this activity for Unity LevelPlay initialization
+        // (will init immediately if config is loaded, or defer until config loads)
+        com.nexiplay.app.data.util.AdManager.registerActivity(this)
+        
         SessionTracker.startSession()
         
         // Link OneSignal user & Request Permission + Sync VIP/Elite ad-free status
@@ -52,14 +56,11 @@ class MainActivity : ComponentActivity() {
                             else -> null
                         }
                         
-                        if (latestExpiry != null) {
-                            com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(this@MainActivity, latestExpiry)
-                        }
+                        // Store badge type and expiry BEFORE calling setAdFreeExpiry
+                        com.nexiplay.app.data.util.AdManager.userBadgeType = p.vipBadge?.trim().orEmpty()
+                        com.nexiplay.app.data.util.AdManager.badgeExpiresAt = p.vipBadgeExpires
                         
-                        // Also store the badge type for reference
-                        if (!p.vipBadge.isNullOrEmpty()) {
-                            com.nexiplay.app.data.util.AdManager.userBadgeType = p.vipBadge
-                        }
+                        com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(this@MainActivity, latestExpiry)
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()

@@ -39,5 +39,6 @@ sealed class Screen(val route: String) {
     data object RequestContent : Screen("request_content")
     data object Contact : Screen("contact")
     data object Leaderboard : Screen("leaderboard")
+    data object Chatbot : Screen("chatbot")
     data object Splash : Screen("splash")
 }

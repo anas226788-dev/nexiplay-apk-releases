@@ -172,7 +172,7 @@ fun BrowseScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    items(state.items) { movie ->
+                    items(state.items, key = { it.id }) { movie ->
                         MovieCardGrid(
                             movie = movie,
                             onClick = {

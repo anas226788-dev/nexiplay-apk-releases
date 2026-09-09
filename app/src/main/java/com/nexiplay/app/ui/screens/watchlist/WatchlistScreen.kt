@@ -119,7 +119,7 @@ fun WatchlistScreen(navController: NavController) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    items(movies) { movie ->
+                    items(movies, key = { it.id }) { movie ->
                         MovieCardGrid(
                             movie = movie,
                             onClick = { navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug)) }

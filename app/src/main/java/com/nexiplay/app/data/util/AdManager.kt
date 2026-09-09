@@ -21,6 +21,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 enum class AdNetwork { STARTIO, UNITY, BOTH }
 
@@ -68,12 +71,48 @@ object AdManager {
     var isTestAdsEnabled = true
     var isUserAdFree = false
     var userBadgeType = ""  // "vip", "elite_pro", "gold_vip", "elite"
+    var badgeExpiresAt: String? = null  // ISO date string for badge expiry
 
     private var isUnityInitialized = false
+    @Volatile var isConfigLoaded = false
+    private var pendingActivity: java.lang.ref.WeakReference<Activity>? = null
+    private val _premiumState = MutableStateFlow(false)
+    val premiumState: StateFlow<Boolean> = _premiumState.asStateFlow()
+
+    /**
+     * Register activity for deferred Unity initialization.
+     * If config is already loaded, initializes immediately.
+     * If not, stores a weak ref and initializes when config loads.
+     */
+    fun registerActivity(activity: Activity) {
+        if (isConfigLoaded && unityAppKey.isNotEmpty()) {
+            initUnityLevelPlay(activity, unityAppKey)
+        } else {
+            pendingActivity = java.lang.ref.WeakReference(activity)
+        }
+    }
+
+    private fun refreshPremiumState() {
+        _premiumState.value = isUserPremium()
+    }
     
-    /** Returns true if user has any active premium badge */
+    /** Returns true if user has any active (non-expired) premium badge */
     fun isUserPremium(): Boolean {
-        return isUserAdFree || userBadgeType.isNotEmpty()
+        if (isUserAdFree) return true
+        val badgeStr = userBadgeType.trim().lowercase()
+        if (badgeStr.contains("vip") || badgeStr.contains("elite")) {
+            // Check if badge has expired
+            val expiry = parseDateRobust(badgeExpiresAt)
+            if (expiry != null && expiry.isBefore(java.time.Instant.now())) {
+                // Badge expired — clear it
+                android.util.Log.d("AdManager", "⏰ Badge '$userBadgeType' expired at $badgeExpiresAt, treating as free user")
+                userBadgeType = ""
+                badgeExpiresAt = null
+                return false
+            }
+            return true
+        }
+        return false
     }
 
     // Marketing Upsell Popup Config
@@ -87,7 +126,7 @@ object AdManager {
     var onShowUpsellPopup: ((title: String, message: String, btnText: String, action: String) -> Unit)? = null
 
     fun checkAndTriggerUpsellPopup() {
-        if (!isUserAdFree && coinPopupEnabled) {
+        if (!isUserPremium() && coinPopupEnabled) {
             adDismissCounter++
             if (adDismissCounter % maxOf(1, coinPopupTriggerCount) == 0) {
                 onShowUpsellPopup?.invoke(coinPopupTitle, coinPopupMessage, coinPopupButtonText, coinPopupAction)
@@ -116,8 +155,16 @@ object AdManager {
         val expiry = prefs.getString("ad_free_until", null)
         
         val savedBadge = prefs.getString("user_badge_type", null)
-        if (!savedBadge.isNullOrEmpty()) {
-            userBadgeType = savedBadge
+        userBadgeType = savedBadge?.trim().orEmpty()
+        badgeExpiresAt = prefs.getString("badge_expires_at", null)
+        
+        // Check if badge has expired and clear it
+        val badgeExpiry = parseDateRobust(badgeExpiresAt)
+        if (badgeExpiry != null && badgeExpiry.isBefore(java.time.Instant.now())) {
+            android.util.Log.d("AdManager", "⏰ Badge expired, clearing: $userBadgeType")
+            userBadgeType = ""
+            badgeExpiresAt = null
+            prefs.edit().remove("user_badge_type").remove("badge_expires_at").apply()
         }
         
         if (!expiry.isNullOrEmpty()) {
@@ -125,24 +172,32 @@ object AdManager {
                 val parsed = parseDateRobust(expiry)
                 if (parsed != null && parsed.isAfter(java.time.Instant.now())) {
                     isUserAdFree = true
+                    refreshPremiumState()
                     return
-                } else {
-                    userBadgeType = ""
-                    prefs.edit().remove("user_badge_type").apply()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
         isUserAdFree = false
+        refreshPremiumState()
     }
 
     fun setAdFreeExpiry(context: Context, expiry: String?) {
         val prefs = context.getSharedPreferences("NexiPlayPrefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("ad_free_until", expiry).apply()
-        if (userBadgeType.isNotEmpty()) {
-            prefs.edit().putString("user_badge_type", userBadgeType).apply()
-        }
+        prefs.edit().apply {
+            putString("ad_free_until", expiry)
+            if (userBadgeType.isNotEmpty()) {
+                putString("user_badge_type", userBadgeType)
+            } else {
+                remove("user_badge_type")
+            }
+            if (!badgeExpiresAt.isNullOrEmpty()) {
+                putString("badge_expires_at", badgeExpiresAt)
+            } else {
+                remove("badge_expires_at")
+            }
+        }.apply()
         syncAdFreeStatus(context)
     }
 
@@ -155,12 +210,14 @@ object AdManager {
         if (appId.isNotEmpty()) {
             StartAppSDK.init(context, appId, false)
             StartAppSDK.setTestAdsEnabled(isTestAdsEnabled)
+            android.util.Log.d("AdManager", "✅ Start.io initialized with appId=$appId, testAds=$isTestAdsEnabled")
         }
     }
 
     fun initUnityLevelPlay(activity: Activity, appKey: String) {
         if (appKey.isNotEmpty() && !isUnityInitialized) {
             try {
+                android.util.Log.d("AdManager", "🔵 Initializing Unity LevelPlay with appKey=$appKey")
                 IronSource.init(
                     activity,
                     appKey,
@@ -169,10 +226,15 @@ object AdManager {
                     IronSource.AD_UNIT.BANNER
                 )
                 IronSource.loadRewardedVideo()
+                IronSource.loadInterstitial()
                 isUnityInitialized = true
+                android.util.Log.d("AdManager", "✅ Unity LevelPlay initialized successfully, preloading rewarded + interstitial")
             } catch (e: Exception) {
+                android.util.Log.e("AdManager", "❌ Unity LevelPlay init failed", e)
                 e.printStackTrace()
             }
+        } else if (isUnityInitialized) {
+            android.util.Log.d("AdManager", "⏭️ Unity LevelPlay already initialized, skipping")
         }
     }
 
@@ -215,10 +277,41 @@ object AdManager {
                     if (!isAppOpenEnabled) {
                         StartAppAd.disableSplash()
                     }
+
+                    isConfigLoaded = true
+
+                    // Trigger deferred Unity initialization if activity was registered before config loaded
+                    if (unityAppKey.isNotEmpty()) {
+                        val act = pendingActivity?.get()
+                        if (act != null) {
+                            withContext(Dispatchers.Main) {
+                                initUnityLevelPlay(act, unityAppKey)
+                            }
+                            pendingActivity = null
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun formatIronSourceError(error: IronSourceError?): String {
+        if (error == null) return "Ad failed to load"
+        val code = error.errorCode
+        val msg = error.errorMessage ?: ""
+        return when (code) {
+            508 -> "No ads currently available. Please try again in a few moments."
+            510 -> "Ad is still loading. Please try again in a few seconds."
+            520, 524 -> "Ad network initializing. Please retry."
+            else -> {
+                if (msg.contains("http://", ignoreCase = true) || msg.contains("https://", ignoreCase = true)) {
+                    "Ad provider is initializing. Please try again shortly."
+                } else {
+                    msg.ifEmpty { "Failed to load ad (Error $code)" }
+                }
+            }
         }
     }
 
@@ -239,7 +332,10 @@ object AdManager {
 
         when (currentNetwork) {
             AdNetwork.STARTIO -> loadAndShowStartIo(activity, onRewarded, onFailed)
-            AdNetwork.UNITY, AdNetwork.BOTH -> {
+            AdNetwork.UNITY -> {
+                loadAndShowUnityRewarded(activity, onRewarded, onFailed)
+            }
+            AdNetwork.BOTH -> {
                 loadAndShowUnityRewarded(activity, onRewarded, onFailed = { unityErr ->
                     loadAndShowStartIo(activity, onRewarded, onFailed = { startioErr ->
                         onFailed("Unity LevelPlay: $unityErr | Start.io: $startioErr")
@@ -255,52 +351,102 @@ object AdManager {
         onFailed: (String) -> Unit
     ) {
         if (unityAppKey.isEmpty()) {
-            loadAndShowStartIo(activity, onRewarded, onFailed)
+            if (currentNetwork == AdNetwork.BOTH) {
+                loadAndShowStartIo(activity, onRewarded, onFailed)
+            } else {
+                onFailed("Unity LevelPlay App Key is not configured")
+            }
             return
         }
         initUnityLevelPlay(activity, unityAppKey)
 
         var hasTriggered = false
+        var hasShown = false
+        var wasRewarded = false
+
+        val showAd = {
+            if (!hasShown) {
+                hasShown = true
+                android.util.Log.d("AdManager", "🎬 Showing Unity rewarded video")
+                if (unityRewardedId.isNotEmpty()) {
+                    IronSource.showRewardedVideo(unityRewardedId)
+                } else {
+                    IronSource.showRewardedVideo()
+                }
+            }
+        }
+
+        // Timeout: if no callback fires within 15 seconds, fallback or fail
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val timeoutRunnable = Runnable {
+            if (!hasTriggered) {
+                hasTriggered = true
+                android.util.Log.w("AdManager", "⏰ Unity rewarded ad timed out")
+                if (currentNetwork == AdNetwork.BOTH) {
+                    loadAndShowStartIo(activity, onRewarded, onFailed)
+                } else {
+                    onFailed("Ad request timed out. Please check network connection.")
+                }
+            }
+        }
+        handler.postDelayed(timeoutRunnable, 15000)
+
         IronSource.setLevelPlayRewardedVideoListener(object : LevelPlayRewardedVideoListener {
-            override fun onAdOpened(adInfo: AdInfo?) {}
+            override fun onAdOpened(adInfo: AdInfo?) {
+                android.util.Log.d("AdManager", "🎬 Unity rewarded ad opened")
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout, ad is showing
+            }
             override fun onAdShowFailed(error: IronSourceError?, adInfo: AdInfo?) {
+                val formatted = formatIronSourceError(error)
+                android.util.Log.e("AdManager", "❌ Unity rewarded show failed: ${error?.errorMessage} (Code ${error?.errorCode})")
+                handler.removeCallbacks(timeoutRunnable)
                 if (!hasTriggered) {
                     hasTriggered = true
-                    loadAndShowStartIo(activity, onRewarded, onFailed)
+                    if (currentNetwork == AdNetwork.BOTH) {
+                        loadAndShowStartIo(activity, onRewarded, onFailed)
+                    } else {
+                        onFailed(formatted)
+                    }
                 }
             }
             override fun onAdClicked(placement: Placement?, adInfo: AdInfo?) {}
             override fun onAdRewarded(placement: Placement?, adInfo: AdInfo?) {
+                android.util.Log.d("AdManager", "🎁 Unity rewarded ad rewarded!")
+                wasRewarded = true
+            }
+            override fun onAdClosed(adInfo: AdInfo?) {
+                android.util.Log.d("AdManager", "🚪 Unity rewarded ad closed, wasRewarded=$wasRewarded")
+                handler.removeCallbacks(timeoutRunnable)
                 if (!hasTriggered) {
                     hasTriggered = true
+                    // Give reward once ad finishes
                     onRewarded()
                 }
             }
-            override fun onAdClosed(adInfo: AdInfo?) {}
             override fun onAdAvailable(adInfo: AdInfo?) {
+                android.util.Log.d("AdManager", "✅ Unity rewarded ad available, showing...")
                 if (!hasTriggered) {
-                    if (unityRewardedId.isNotEmpty()) {
-                        IronSource.showRewardedVideo(unityRewardedId)
-                    } else {
-                        IronSource.showRewardedVideo()
-                    }
+                    showAd()
                 }
             }
             override fun onAdUnavailable() {
+                android.util.Log.w("AdManager", "⚠️ Unity rewarded ad unavailable")
+                handler.removeCallbacks(timeoutRunnable)
                 if (!hasTriggered) {
                     hasTriggered = true
-                    loadAndShowStartIo(activity, onRewarded, onFailed)
+                    if (currentNetwork == AdNetwork.BOTH) {
+                        loadAndShowStartIo(activity, onRewarded, onFailed)
+                    } else {
+                        onFailed("No ads currently available. Please try again shortly.")
+                    }
                 }
             }
         })
 
         if (IronSource.isRewardedVideoAvailable()) {
-            if (unityRewardedId.isNotEmpty()) {
-                IronSource.showRewardedVideo(unityRewardedId)
-            } else {
-                IronSource.showRewardedVideo()
-            }
+            showAd()
         } else {
+            android.util.Log.d("AdManager", "🔄 Loading Unity rewarded video...")
             IronSource.loadRewardedVideo()
         }
     }
@@ -330,7 +476,7 @@ object AdManager {
 
     var contentAdCounter = 0
     fun showAlternatingAd(context: Context, onAdFinished: () -> Unit) {
-        if (isUserAdFree) {
+        if (isUserPremium()) {
             onAdFinished()
             return
         }
@@ -349,7 +495,7 @@ object AdManager {
     }
 
     fun showInterstitialAd(context: Context, onClosed: () -> Unit) {
-        if (!isInterstitialEnabled || isUserAdFree) {
+        if (!isInterstitialEnabled || isUserPremium()) {
             onClosed()
             return
         }
@@ -369,7 +515,12 @@ object AdManager {
 
         when (currentNetwork) {
             AdNetwork.STARTIO -> loadAndShowStartIoInterstitial(activity, wrappedOnClosed)
-            AdNetwork.UNITY, AdNetwork.BOTH -> {
+            AdNetwork.UNITY -> {
+                loadAndShowUnityInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
+                    wrappedOnClosed()
+                })
+            }
+            AdNetwork.BOTH -> {
                 loadAndShowUnityInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
                     loadAndShowStartIoInterstitial(activity, wrappedOnClosed)
                 })
@@ -433,14 +584,25 @@ object AdManager {
     }
 
     fun getBannerAdView(context: Context): View? {
-        if (!isBannerEnabled || isUserAdFree) return null
+        if (!isBannerEnabled || isUserPremium()) return null
         val activity = context as? Activity
         if (activity != null && unityAppKey.isNotEmpty()) {
             initUnityLevelPlay(activity, unityAppKey)
         }
 
         return when (currentNetwork) {
-            AdNetwork.UNITY, AdNetwork.BOTH -> {
+            AdNetwork.UNITY -> {
+                if (activity != null && unityAppKey.isNotEmpty()) {
+                    val banner = IronSource.createBanner(activity, ISBannerSize.BANNER)
+                    if (unityBannerId.isNotEmpty()) {
+                        IronSource.loadBanner(banner, unityBannerId)
+                    } else {
+                        IronSource.loadBanner(banner)
+                    }
+                    banner
+                } else null
+            }
+            AdNetwork.BOTH -> {
                 if (activity != null && unityAppKey.isNotEmpty()) {
                     val banner = IronSource.createBanner(activity, ISBannerSize.BANNER)
                     if (unityBannerId.isNotEmpty()) {
@@ -460,12 +622,15 @@ object AdManager {
     }
 
     fun getNativeAdView(context: Context): View? {
-        if (!isNativeEnabled || isUserAdFree) return null
-        return com.startapp.sdk.ads.banner.Mrec(context)
+        if (!isNativeEnabled || isUserPremium()) return null
+        return when (currentNetwork) {
+            AdNetwork.STARTIO, AdNetwork.BOTH -> com.startapp.sdk.ads.banner.Mrec(context)
+            AdNetwork.UNITY -> null // Unity LevelPlay uses banner/interstitial/rewarded
+        }
     }
 
     fun showAppOpenAd(context: Context, onClosed: () -> Unit) {
-        if (!isAppOpenEnabled || isUserAdFree) {
+        if (!isAppOpenEnabled || isUserPremium()) {
             onClosed()
             return
         }
@@ -477,11 +642,15 @@ object AdManager {
         
         when (currentNetwork) {
             AdNetwork.STARTIO -> {
-                val startAppAd = StartAppAd(context)
-                startAppAd.loadAd(object : AdEventListener {
+                val startAppAd = StartAppAd(activity)
+                startAppAd.loadAd(StartAppAd.AdMode.AUTOMATIC, object : AdEventListener {
                     override fun onReceiveAd(ad: com.startapp.sdk.adsbase.Ad) {
-                        startAppAd.showAd()
-                        onClosed() 
+                        startAppAd.showAd(object : com.startapp.sdk.adsbase.adlisteners.AdDisplayListener {
+                            override fun adHidden(p0: com.startapp.sdk.adsbase.Ad?) { onClosed() }
+                            override fun adDisplayed(p0: com.startapp.sdk.adsbase.Ad?) {}
+                            override fun adClicked(p0: com.startapp.sdk.adsbase.Ad?) {}
+                            override fun adNotDisplayed(p0: com.startapp.sdk.adsbase.Ad?) { onClosed() }
+                        })
                     }
                     override fun onFailedToReceiveAd(ad: com.startapp.sdk.adsbase.Ad?) {
                         onClosed()

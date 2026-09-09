@@ -42,7 +42,13 @@ fun SettingsScreen(navController: NavController) {
     var hideNsfw by remember { mutableStateOf(false) }
     var showChangeEmailDialog by remember { mutableStateOf(false) }
     var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var showWhatsAppDialog by remember { mutableStateOf(false) }
+    var whatsappNumber by remember { mutableStateOf<String?>(null) }
     var storageUriStr by remember { mutableStateOf(settings.sdCardUri) }
+
+    val appUpdateInfo by com.nexiplay.app.data.util.AppUpdateManager.updateInfo.collectAsState()
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var showManualUpdateDialog by remember { mutableStateOf(false) }
 
     val documentTreeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -67,6 +73,15 @@ fun SettingsScreen(navController: NavController) {
                     .select { filter { eq("id", user.id) } }
                     .decodeSingleOrNull<Map<String, kotlinx.serialization.json.JsonElement>>()
                 hideNsfw = profile?.get("hide_nsfw")?.toString() == "true"
+                
+                val meta = user.userMetadata
+                val metaWhatsapp = meta?.get("whatsapp_number")?.let {
+                    if (it is kotlinx.serialization.json.JsonPrimitive) it.content.takeIf { c -> c != "null" } else it.toString().replace("\"", "").takeIf { c -> c != "null" }
+                }
+                val dbWhatsapp = profile?.get("whatsapp_number")?.let {
+                    if (it is kotlinx.serialization.json.JsonPrimitive) it.content.takeIf { c -> c != "null" } else it.toString().replace("\"", "").takeIf { c -> c != "null" }
+                }
+                whatsappNumber = dbWhatsapp?.takeIf { it.isNotBlank() && it != "null" } ?: metaWhatsapp
             } catch (e: Exception) { 
                 e.printStackTrace()
             }
@@ -105,6 +120,8 @@ fun SettingsScreen(navController: NavController) {
                         .background(themeCard(), RoundedCornerShape(12.dp))
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                 ) {
+                    SettingsClickableValueRow("WhatsApp Number", whatsappNumber ?: "Not set") { showWhatsAppDialog = true }
+                    Divider(color = themeSurface())
                     SettingsClickableRow("Change Email") { showChangeEmailDialog = true }
                     Divider(color = themeSurface())
                     SettingsClickableRow("Change Password") { showChangePasswordDialog = true }
@@ -213,7 +230,25 @@ fun SettingsScreen(navController: NavController) {
                     .padding(16.dp)
             ) {
                 SettingsRow("App", "NexiPlay")
-                SettingsRow("Version", "1.0.0")
+                SettingsRow("Version", "${com.nexiplay.app.BuildConfig.VERSION_NAME} (${com.nexiplay.app.BuildConfig.VERSION_CODE})")
+                SettingsClickableRow(if (isCheckingUpdate) "Checking for updates..." else "Check for Updates") {
+                    if (!isCheckingUpdate) {
+                        isCheckingUpdate = true
+                        scope.launch {
+                            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate()
+                            isCheckingUpdate = false
+                            if (com.nexiplay.app.data.util.AppUpdateManager.isUpdateAvailable) {
+                                showManualUpdateDialog = true
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "You are using the latest version (v${com.nexiplay.app.BuildConfig.VERSION_NAME})! 🎉",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                }
                 SettingsRow("Developer", "NexiPlay Team")
                 SettingsRow("Platform", "Android")
                 
@@ -236,7 +271,18 @@ fun SettingsScreen(navController: NavController) {
             Spacer(Modifier.height(24.dp))
         }
 
-        // "?"? Change Email Dialog "?"?
+        // ── Manual Update Dialog ──
+        if (showManualUpdateDialog && appUpdateInfo != null) {
+            com.nexiplay.app.ui.components.UpdateDialog(
+                updateInfo = appUpdateInfo!!,
+                onDismiss = {
+                    showManualUpdateDialog = false
+                    com.nexiplay.app.data.util.AppUpdateManager.resetState()
+                }
+            )
+        }
+
+        // ── Change Email Dialog ──
         if (showChangeEmailDialog) {
             var newEmail by remember { mutableStateOf("") }
             var isUpdating by remember { mutableStateOf(false) }
@@ -340,6 +386,70 @@ fun SettingsScreen(navController: NavController) {
                 }
             )
         }
+
+        // ── WhatsApp Dialog ──
+        if (showWhatsAppDialog) {
+            var inputPhone by remember { mutableStateOf(whatsappNumber ?: "") }
+            var isUpdating by remember { mutableStateOf(false) }
+
+            AlertDialog(
+                onDismissRequest = { if (!isUpdating) showWhatsAppDialog = false },
+                containerColor = themeSurface(),
+                titleContentColor = themeTextPrimary(),
+                textContentColor = themeTextSecondary(),
+                title = { Text("WhatsApp Number", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Enter your WhatsApp number for support, VIP perks & updates.", fontSize = 14.sp)
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedTextField(
+                            value = inputPhone,
+                            onValueChange = { inputPhone = it },
+                            placeholder = { Text("+88017xxxxxxxx or 017xxxxxxxx") },
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = themeTextPrimary(), unfocusedTextColor = themeTextPrimary()
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val trimmed = inputPhone.trim()
+                            scope.launch {
+                                isUpdating = true
+                                try {
+                                    SupabaseClient.main.auth.updateUser {
+                                        data = kotlinx.serialization.json.buildJsonObject {
+                                            put("whatsapp_number", kotlinx.serialization.json.JsonPrimitive(trimmed))
+                                        }
+                                    }
+                                    SupabaseClient.main.from("profiles").update(
+                                        mapOf(
+                                            "whatsapp_number" to trimmed,
+                                            "updated_at" to java.time.Instant.now().toString()
+                                        )
+                                    ) { filter { eq("id", userId) } }
+
+                                    whatsappNumber = trimmed.ifEmpty { null }
+                                    android.widget.Toast.makeText(context, "WhatsApp number updated successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                                    showWhatsAppDialog = false
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, e.message ?: "Failed to update WhatsApp number", android.widget.Toast.LENGTH_LONG).show()
+                                } finally { isUpdating = false }
+                            }
+                        },
+                        enabled = !isUpdating
+                    ) { Text(if (isUpdating) "Saving..." else "Save", color = NexiRed) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showWhatsAppDialog = false }, enabled = !isUpdating) { Text("Cancel", color = themeTextSecondary()) }
+                }
+            )
+        }
     }
 }
 
@@ -366,5 +476,24 @@ private fun SettingsClickableRow(label: String, onClick: () -> Unit) {
     ) {
         Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = themeTextPrimary())
         Icon(Icons.Default.ChevronRight, contentDescription = "View", tint = themeTextSecondary(), modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun SettingsClickableValueRow(label: String, value: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = themeTextPrimary())
+            Spacer(Modifier.height(2.dp))
+            Text(value, fontSize = 12.sp, color = if (value == "Not set") themeTextTertiary() else NexiRed, fontFamily = InterFont)
+        }
+        Icon(Icons.Default.ChevronRight, contentDescription = "Edit", tint = themeTextSecondary(), modifier = Modifier.size(16.dp))
     }
 }
