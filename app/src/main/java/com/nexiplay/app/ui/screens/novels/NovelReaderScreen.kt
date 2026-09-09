@@ -22,6 +22,11 @@ import com.nexiplay.app.ui.theme.*
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +54,23 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
 
                 if (chapter == null) {
                     error = "Chapter not found"
+                } else if (chapter?.content.isNullOrBlank()) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            val r2Url = "https://pub-246be7bb40a14c07b8a8359e2bc8285d.r2.dev/chapters/${novelId}/${num}.json"
+                            val client = OkHttpClient()
+                            val req = Request.Builder().url(r2Url).build()
+                            val resp = client.newCall(req).execute()
+                            if (resp.isSuccessful) {
+                                val bodyStr = resp.body?.string() ?: ""
+                                val json = JSONObject(bodyStr)
+                                val text = json.optString("content")
+                                chapter = chapter?.copy(content = text)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // ignore
+                    }
                 }
 
                 // Get total chapter count
