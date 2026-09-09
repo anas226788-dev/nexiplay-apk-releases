@@ -22,6 +22,10 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
 
+    env:
+      JAVA_OPTS: "-Xmx4096m"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC -Dfile.encoding=UTF-8"
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -40,6 +44,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.11.1
+
+      - name: Ensure gradle.properties
+        run: |
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          EOF
 
       - name: Ensure Gradle Wrapper
         run: |
@@ -85,11 +99,11 @@ jobs:
 
       - name: Build Debug APK
         if: "${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name == 'push' }}"
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace --no-daemon --max-workers=2
 
       - name: Build Release APK
         if: "${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' }}"
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease --stacktrace --no-daemon --max-workers=2
 
       - name: Upload Debug APK
         if: "${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name == 'push' }}"
