@@ -220,13 +220,24 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
 
             // ── Chapter Content ──
             val rawContent = chapter!!.content ?: ""
-            val parsedContent = android.text.Html.fromHtml(rawContent, android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim()
+            val parsedContent = remember(rawContent) {
+                if (rawContent.isBlank()) ""
+                else {
+                    var text = rawContent.trim()
+                    if (text.contains("<") && text.contains(">")) {
+                        text = android.text.Html.fromHtml(text, android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim()
+                    }
+                    text = text.replace("\r\n", "\n").replace("\r", "\n")
+                    val lines = text.split(Regex("\n+")).map { it.trim() }.filter { it.isNotEmpty() }
+                    lines.joinToString("\n\n")
+                }
+            }
             
             Text(
                 text = parsedContent,
                 fontSize = 16.sp,
                 color = themeTextPrimary().copy(alpha = 0.92f),
-                lineHeight = 28.sp,
+                lineHeight = 30.sp,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
             )
 
