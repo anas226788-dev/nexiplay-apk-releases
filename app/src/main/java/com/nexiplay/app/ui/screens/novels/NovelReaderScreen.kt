@@ -20,6 +20,7 @@ import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.NovelChapter
 import com.nexiplay.app.ui.theme.*
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,13 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+// Shared singleton OkHttpClient with reasonable timeouts
+private val r2HttpClient = OkHttpClient.Builder()
+    .connectTimeout(20, TimeUnit.SECONDS)
+    .readTimeout(20, TimeUnit.SECONDS)
+    .build()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,6 +43,7 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
     var totalChapters by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var currentChapterNum by remember(chapterNumber) { mutableIntStateOf(chapterNumber) }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
 
@@ -43,7 +52,8 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
             loading = true
             error = null
             try {
-                chapter = SupabaseClient.novels.from("novel_chapters")
+                // 1. Fetch metadata from Supabase
+                val fetchedChapter = SupabaseClient.novels.from("novel_chapters")
                     .select {
                         filter {
                             eq("novel_id", novelId)
@@ -52,38 +62,57 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                     }
                     .decodeSingleOrNull<NovelChapter>()
 
-                if (chapter == null) {
-                    error = "Chapter not found"
-                } else if (chapter?.content.isNullOrBlank()) {
-                    try {
+                if (fetchedChapter == null) {
+                    error = "Chapter $num not found."
+                } else {
+                    chapter = fetchedChapter
+
+                    // 2. Fetch full chapter content from Cloudflare R2 CDN if content is empty in Supabase
+                    if (fetchedChapter.content.isNullOrBlank()) {
+                        var cdnContent: String? = null
+                        var cdnError: String? = null
+
                         withContext(Dispatchers.IO) {
-                            val r2Url = "https://pub-246be7bb40a14c07b8a8359e2bc8285d.r2.dev/chapters/${novelId}/${num}.json"
-                            val client = OkHttpClient()
-                            val req = Request.Builder().url(r2Url).build()
-                            val resp = client.newCall(req).execute()
-                            if (resp.isSuccessful) {
-                                val bodyStr = resp.body?.string() ?: ""
-                                val json = JSONObject(bodyStr)
-                                val text = json.optString("content")
-                                chapter = chapter?.copy(content = text)
+                            try {
+                                val r2Url = "https://pub-246be7bb40a14c07b8a8359e2bc8285d.r2.dev/chapters/${novelId}/${num}.json"
+                                val req = Request.Builder()
+                                    .url(r2Url)
+                                    .header("Cache-Control", "no-cache")
+                                    .build()
+                                val resp = r2HttpClient.newCall(req).execute()
+                                if (resp.isSuccessful) {
+                                    val bodyStr = resp.body?.string() ?: ""
+                                    if (bodyStr.isNotBlank()) {
+                                        val json = JSONObject(bodyStr)
+                                        cdnContent = json.optString("content", "")
+                                    }
+                                } else {
+                                    cdnError = "CDN returned HTTP ${resp.code}"
+                                }
+                            } catch (e: Exception) {
+                                cdnError = e.localizedMessage ?: "Failed to connect to CDN"
                             }
                         }
-                    } catch (e: Exception) {
-                        // ignore
+
+                        if (!cdnContent.isNullOrBlank()) {
+                            chapter = chapter?.copy(content = cdnContent)
+                        } else if (cdnError != null) {
+                            error = "Could not load chapter content ($cdnError). Please tap Retry."
+                        }
                     }
                 }
 
-                // Get total chapter count
+                // 3. Get total chapter count
                 val allChapters = SupabaseClient.novels.from("novel_chapters")
-                    .select {
+                    .select(Columns.raw("chapter_number")) {
                         filter { eq("novel_id", novelId) }
                         order("chapter_number", Order.DESCENDING)
                         limit(1)
                     }
                     .decodeList<NovelChapter>()
-                totalChapters = allChapters.firstOrNull()?.chapterNumber ?: 0
+                totalChapters = allChapters.firstOrNull()?.chapterNumber ?: maxOf(num, totalChapters)
             } catch (e: Exception) {
-                error = e.message
+                error = e.localizedMessage ?: "Failed to load chapter details"
             }
             loading = false
             scrollState.scrollTo(0)
@@ -91,10 +120,9 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
     }
 
     LaunchedEffect(novelId, chapterNumber) {
+        currentChapterNum = chapterNumber
         loadChapter(chapterNumber)
     }
-
-    var currentChapterNum by remember(chapterNumber) { mutableIntStateOf(chapterNumber) }
 
     Scaffold(
         topBar = {
@@ -129,15 +157,31 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
             return@Scaffold
         }
 
-        if (error != null || chapter == null) {
+        if (error != null || chapter == null || chapter?.content.isNullOrBlank()) {
             Box(
                 Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("😕", fontSize = 40.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text(error ?: "Chapter not found", color = themeTextSecondary())
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Text("📖", fontSize = 48.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        error ?: "No content available for this chapter.",
+                        color = themeTextSecondary(),
+                        textAlign = TextAlign.Center,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { loadChapter(currentChapterNum) },
+                        colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Retry", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             return@Scaffold
@@ -175,7 +219,7 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
             }
 
             // ── Chapter Content ──
-            val rawContent = chapter!!.content ?: "No content available."
+            val rawContent = chapter!!.content ?: ""
             val parsedContent = android.text.Html.fromHtml(rawContent, android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim()
             
             Text(
@@ -231,16 +275,39 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                 }
             }
 
-            // Chapter progress
-            Text(
-                "Chapter $currentChapterNum of $totalChapters",
-                fontSize = 12.sp,
-                color = themeTextTertiary(),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            )
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
 
-            Spacer(Modifier.height(16.dp))
+@Composable
+private fun NovelReaderSkeleton() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(0.5f)
+                .height(24.dp)
+                .background(themeCard(), RoundedCornerShape(6.dp))
+        )
+        Box(
+            Modifier
+                .fillMaxWidth(0.8f)
+                .height(32.dp)
+                .background(themeCard(), RoundedCornerShape(8.dp))
+        )
+        Spacer(Modifier.height(16.dp))
+        repeat(8) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(18.dp)
+                    .background(themeCard(), RoundedCornerShape(4.dp))
+            )
         }
     }
 }

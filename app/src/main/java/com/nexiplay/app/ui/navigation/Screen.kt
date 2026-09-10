@@ -21,7 +21,11 @@ sealed class Screen(val route: String) {
 
     // ── Novel Screens ──
     data object NovelDetail : Screen("novel/{slug}") {
-        fun createRoute(slug: String) = "novel/$slug"
+        fun createRoute(slug: String): String = try {
+            "novel/" + java.net.URLEncoder.encode(slug, "UTF-8")
+        } catch (e: Exception) {
+            "novel/$slug"
+        }
     }
     data object NovelReader : Screen("novel/{slug}/chapter/{chapterSlug}") {
         fun createRoute(slug: String, chapterSlug: String) = "novel/$slug/chapter/$chapterSlug"

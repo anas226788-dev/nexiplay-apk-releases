@@ -400,7 +400,12 @@ fun NexiPlayNavHost() {
                     route = Screen.NovelDetail.route,
                     arguments = listOf(navArgument("slug") { type = NavType.StringType }),
                 ) { backStackEntry ->
-                    val slug = backStackEntry.arguments?.getString("slug") ?: ""
+                    val rawSlug = backStackEntry.arguments?.getString("slug") ?: ""
+                    val slug = try {
+                        java.net.URLDecoder.decode(rawSlug, "UTF-8")
+                    } catch (e: Exception) {
+                        rawSlug
+                    }
                     NovelDetailScreen(navController, slug)
                 }
 

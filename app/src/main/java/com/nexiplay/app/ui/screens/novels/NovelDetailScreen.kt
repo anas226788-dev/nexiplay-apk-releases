@@ -41,16 +41,33 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
     var loading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var expandDesc by remember { mutableStateOf(false) }
+    var chapterSearch by remember { mutableStateOf("") }
+    var sortAscending by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+
+    val decodedSlug = remember(slug) {
+        try {
+            java.net.URLDecoder.decode(slug, "UTF-8")
+        } catch (e: Exception) {
+            slug
+        }
+    }
 
     fun fetchNovel() {
         loading = true
         errorMessage = null
         scope.launch {
             try {
-                novel = SupabaseClient.novels.from("novels")
-                    .select { filter { eq("slug", slug) } }
+                var fetchedNovel = SupabaseClient.novels.from("novels")
+                    .select { filter { eq("slug", decodedSlug) } }
                     .decodeSingleOrNull<Novel>()
+
+                if (fetchedNovel == null && decodedSlug != slug) {
+                    fetchedNovel = SupabaseClient.novels.from("novels")
+                        .select { filter { eq("slug", slug) } }
+                        .decodeSingleOrNull<Novel>()
+                }
+                novel = fetchedNovel
 
                 if (novel != null) {
                     chapters = SupabaseClient.novels.from("novel_chapters")
@@ -67,7 +84,7 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
         }
     }
 
-    LaunchedEffect(slug) {
+    LaunchedEffect(decodedSlug) {
         fetchNovel()
     }
 
@@ -159,10 +176,11 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
 
             // ── Start Reading Button ──
             if (chapters.isNotEmpty()) {
+                val startChapterNum = chapters.firstOrNull()?.chapterNumber ?: 1
                 Button(
                     onClick = {
                         com.nexiplay.app.data.util.AdManager.showAlternatingAd(context) {
-                            navController.navigate("novel_reader/${n.id}/1")
+                            navController.navigate("novel_reader/${n.id}/$startChapterNum")
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
@@ -195,42 +213,116 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                 Spacer(Modifier.height(16.dp))
             }
 
-            // ── Chapter List ──
-            Text("📚 Chapters", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
-            Spacer(Modifier.height(8.dp))
+            // ── Chapter List Header with Search & Sort ──
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("📚 Chapters (${chapters.size})", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
 
-            chapters.forEach { ch ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 3.dp)
-                        .background(themeCard(), RoundedCornerShape(10.dp))
-                        .clickable {
-                            com.nexiplay.app.data.util.AdManager.showAlternatingAd(context) {
-                                navController.navigate("novel_reader/${n.id}/${ch.chapterNumber}")
-                            }
-                        }
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier.size(36.dp)
-                            .background(NexiRed.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center,
+                if (chapters.size > 1) {
+                    TextButton(
+                        onClick = { sortAscending = !sortAscending },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
+                        Icon(
+                            if (sortAscending) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                            null,
+                            modifier = Modifier.size(14.dp),
+                            tint = NexiRed
+                        )
+                        Spacer(Modifier.width(4.dp))
                         Text(
-                            "${ch.chapterNumber}",
-                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = NexiRed,
+                            if (sortAscending) "1 → End" else "End → 1",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NexiRed
                         )
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        ch.title,
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = themeTextPrimary(),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(Icons.Default.ChevronRight, null, tint = themeTextTertiary(), modifier = Modifier.size(20.dp))
+                }
+            }
+
+            if (chapters.size > 15) {
+                OutlinedTextField(
+                    value = chapterSearch,
+                    onValueChange = { chapterSearch = it },
+                    placeholder = { Text("Search chapter # or title...", fontSize = 12.sp, color = themeTextTertiary()) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = themeCard(),
+                        unfocusedContainerColor = themeCard(),
+                        focusedBorderColor = NexiRed,
+                        unfocusedBorderColor = themeBorder(),
+                        focusedTextColor = themeTextPrimary(),
+                        unfocusedTextColor = themeTextPrimary(),
+                    ),
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, null, tint = themeTextSecondary(), modifier = Modifier.size(16.dp))
+                    },
+                    trailingIcon = {
+                        if (chapterSearch.isNotEmpty()) {
+                            IconButton(onClick = { chapterSearch = "" }) {
+                                Icon(Icons.Default.Close, null, tint = themeTextSecondary(), modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            val displayChapters = remember(chapters, chapterSearch, sortAscending) {
+                val sorted = if (sortAscending) chapters else chapters.reversed()
+                if (chapterSearch.isBlank()) sorted
+                else {
+                    val q = chapterSearch.trim().lowercase()
+                    sorted.filter { it.chapterNumber.toString() == q || it.title.lowercase().contains(q) }
+                }
+            }
+
+            if (displayChapters.isEmpty()) {
+                Text(
+                    "No chapters match \"$chapterSearch\"",
+                    fontSize = 13.sp,
+                    color = themeTextSecondary(),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            } else {
+                displayChapters.forEach { ch ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .background(themeCard(), RoundedCornerShape(10.dp))
+                            .clickable {
+                                com.nexiplay.app.data.util.AdManager.showAlternatingAd(context) {
+                                    navController.navigate("novel_reader/${n.id}/${ch.chapterNumber}")
+                                }
+                            }
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(36.dp)
+                                .background(NexiRed.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "${ch.chapterNumber}",
+                                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = NexiRed,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            ch.title,
+                            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = themeTextPrimary(),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(Icons.Default.ChevronRight, null, tint = themeTextTertiary(), modifier = Modifier.size(20.dp))
+                    }
                 }
             }
 
