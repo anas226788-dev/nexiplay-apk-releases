@@ -71,7 +71,7 @@ fun NovelsScreen(navController: NavController) {
                 val from = (targetPage - 1) * PAGE_SIZE
                 val to = from + PAGE_SIZE - 1
 
-                val cols = Columns.raw("id, title, slug, cover_url, author, description, status, total_chapters, created_at")
+                val cols = Columns.raw("id, title, slug, cover_url, author, genre, description, status, created_at")
 
                 val result = SupabaseClient.novels.from("novels").select(cols) {
                     count(Count.EXACT)
@@ -448,7 +448,7 @@ private fun NovelCard(novel: Novel, onClick: () -> Unit) {
                 }
             }
 
-            // Chapter count inside the gradient
+            // Chapter count or Genre inside the gradient
             if (novel.totalChapters != null && novel.totalChapters > 0) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -460,6 +460,23 @@ private fun NovelCard(novel: Novel, onClick: () -> Unit) {
                     Spacer(Modifier.width(4.dp))
                     Text(
                         "${novel.totalChapters} Chapters",
+                        fontSize = 11.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = InterFont
+                    )
+                }
+            } else if (!novel.genre.isNullOrBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(12.dp)
+                ) {
+                    Icon(Icons.Default.MenuBook, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        novel.genre,
                         fontSize = 11.sp,
                         color = Color.White,
                         fontWeight = FontWeight.Bold,

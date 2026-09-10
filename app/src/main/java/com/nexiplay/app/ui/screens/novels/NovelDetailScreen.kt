@@ -159,10 +159,20 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                 if (n.author != null) {
                     Text("✍ ${n.author}", fontSize = 13.sp, color = themeTextSecondary())
                 }
+                if (!n.genre.isNullOrBlank()) {
+                    Box(
+                        Modifier.background(
+                            VipPurple,
+                            RoundedCornerShape(6.dp)
+                        ).padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(n.genre.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
+                    }
+                }
                 if (n.status != null) {
                     Box(
                         Modifier.background(
-                            if (n.status == "Ongoing") SuccessGreen else VipPurple,
+                            if (n.status == "Ongoing") SuccessGreen else Color(0xFFE50914),
                             RoundedCornerShape(6.dp)
                         ).padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {

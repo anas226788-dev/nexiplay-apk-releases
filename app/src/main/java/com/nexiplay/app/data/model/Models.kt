@@ -142,6 +142,7 @@ data class Novel(
     @SerialName("cover_url") val coverUrl: String? = null,
     val description: String? = null,
     val author: String? = null,
+    val genre: String? = null,
     val status: String? = null,
     @SerialName("total_chapters") val totalChapters: Int? = null,
     @SerialName("created_at") val createdAt: String? = null,
