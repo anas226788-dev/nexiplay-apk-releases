@@ -116,7 +116,14 @@ jobs:
           fi
 
       - name: Build Android APKs
-        run: ./gradlew assembleDebug assembleRelease --stacktrace --no-daemon --max-workers=2
+        run: |
+          ./gradlew assembleDebug assembleRelease --no-daemon --max-workers=2 || {
+            echo "================================================================"
+            echo "BUILD FAILED! Printing exact Kotlin compilation errors:"
+            echo "================================================================"
+            ./gradlew compileDebugKotlin --no-daemon --console=plain
+            exit 1
+          }
 
       - name: Prepare APKs for Distribution
         run: |
