@@ -290,35 +290,3 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
         }
     }
 }
-
-@Composable
-private fun NovelReaderSkeleton() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth(0.5f)
-                .height(24.dp)
-                .background(themeCard(), RoundedCornerShape(6.dp))
-        )
-        Box(
-            Modifier
-                .fillMaxWidth(0.8f)
-                .height(32.dp)
-                .background(themeCard(), RoundedCornerShape(8.dp))
-        )
-        Spacer(Modifier.height(16.dp))
-        repeat(8) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(18.dp)
-                    .background(themeCard(), RoundedCornerShape(4.dp))
-            )
-        }
-    }
-}

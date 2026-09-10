@@ -14,10 +14,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FirstPage
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.LastPage
+import androidx.compose.material.icons.filled.FirstPage
+import androidx.compose.material.icons.filled.LastPage
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -317,7 +317,7 @@ fun NovelsScreen(navController: NavController) {
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.FirstPage,
+                            Icons.Filled.FirstPage,
                             contentDescription = "First Page",
                             tint = if (currentPage > 1) themeTextPrimary() else themeTextTertiary().copy(alpha = 0.3f)
                         )
@@ -385,7 +385,7 @@ fun NovelsScreen(navController: NavController) {
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.LastPage,
+                            Icons.Filled.LastPage,
                             contentDescription = "Last Page",
                             tint = if (currentPage < totalPages) themeTextPrimary() else themeTextTertiary().copy(alpha = 0.3f)
                         )
