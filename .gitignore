@@ -30,6 +30,7 @@ output/
 
 # Signing
 *.keystore
+!app/release.keystore
 *.jks
 signing.properties
 

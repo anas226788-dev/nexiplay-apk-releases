@@ -73,12 +73,13 @@ jobs:
           fi
           chmod +x gradlew
 
-      - name: Ensure Android Keystore
+      - name: Setup Release Keystore
         run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
           fi
+          mkdir -p ~/.android
+          cp app/release.keystore ~/.android/debug.keystore || true
 
       - name: Ensure google-services.json
         run: |
@@ -124,6 +125,11 @@ jobs:
             ./gradlew compileDebugKotlin --no-daemon --console=plain
             exit 1
           }
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'nexiplay2026' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'nexiplay' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'nexiplay2026' }}
+
 
       - name: Prepare APKs for Distribution
         run: |
