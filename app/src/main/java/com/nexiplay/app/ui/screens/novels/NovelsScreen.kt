@@ -14,6 +14,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FirstPage
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -69,10 +73,8 @@ fun NovelsScreen(navController: NavController) {
 
                 val cols = Columns.raw("id, title, slug, cover_url, author, description, status, total_chapters, created_at")
 
-                val result = SupabaseClient.novels.from("novels").select(
-                    columns = cols,
-                    count = Count.EXACT
-                ) {
+                val result = SupabaseClient.novels.from("novels").select(cols) {
+                    count(Count.EXACT)
                     if (q.isNotEmpty()) {
                         filter {
                             ilike("title", "%$q%")
@@ -315,7 +317,7 @@ fun NovelsScreen(navController: NavController) {
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
-                            Icons.Default.FirstPage,
+                            Icons.AutoMirrored.Filled.FirstPage,
                             contentDescription = "First Page",
                             tint = if (currentPage > 1) themeTextPrimary() else themeTextTertiary().copy(alpha = 0.3f)
                         )
@@ -335,7 +337,7 @@ fun NovelsScreen(navController: NavController) {
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                         elevation = null
                     ) {
-                        Icon(Icons.Default.ChevronLeft, null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(2.dp))
                         Text("Prev", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = InterFont)
                     }
@@ -373,7 +375,7 @@ fun NovelsScreen(navController: NavController) {
                     ) {
                         Text("Next", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = InterFont)
                         Spacer(Modifier.width(2.dp))
-                        Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp))
                     }
 
                     // Last page button
@@ -383,7 +385,7 @@ fun NovelsScreen(navController: NavController) {
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
-                            Icons.Default.LastPage,
+                            Icons.AutoMirrored.Filled.LastPage,
                             contentDescription = "Last Page",
                             tint = if (currentPage < totalPages) themeTextPrimary() else themeTextTertiary().copy(alpha = 0.3f)
                         )

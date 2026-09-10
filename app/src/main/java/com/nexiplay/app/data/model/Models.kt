@@ -136,9 +136,9 @@ data class UpdateItem(
 
 @Serializable
 data class Novel(
-    val id: String,
-    val title: String,
-    val slug: String,
+    val id: String = "",
+    val title: String = "",
+    val slug: String = "",
     @SerialName("cover_url") val coverUrl: String? = null,
     val description: String? = null,
     val author: String? = null,
@@ -149,12 +149,12 @@ data class Novel(
 
 @Serializable
 data class NovelChapter(
-    val id: String,
-    @SerialName("novel_id") val novelId: String,
-    val title: String,
-    val slug: String,
+    val id: String = "",
+    @SerialName("novel_id") val novelId: String = "",
+    val title: String = "",
+    val slug: String = "",
     val content: String? = null,
-    @SerialName("chapter_number") val chapterNumber: Int,
+    @SerialName("chapter_number") val chapterNumber: Int = 0,
     @SerialName("created_at") val createdAt: String? = null,
 )
 
