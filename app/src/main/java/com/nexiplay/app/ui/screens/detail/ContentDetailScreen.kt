@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.*
 import com.nexiplay.app.ui.components.*
@@ -129,8 +132,16 @@ fun ContentDetailScreen(
                 ) {
                     // ── Hero Banner ──
                     Box(Modifier.fillMaxWidth().height(280.dp)) {
+                        val bannerUrl = movie.bannerUrlMobile ?: movie.bannerUrlDesktop ?: movie.posterUrl
+                        val bannerRequest = remember(bannerUrl) {
+                            ImageRequest.Builder(context)
+                                .data(bannerUrl)
+                                .size(Size(720, 600))
+                                .precision(Precision.INEXACT)
+                                .build()
+                        }
                         AsyncImage(
-                            model = movie.bannerUrlMobile ?: movie.bannerUrlDesktop ?: movie.posterUrl,
+                            model = bannerRequest,
                             contentDescription = movie.title,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
@@ -153,8 +164,15 @@ fun ContentDetailScreen(
                         // ── Title & Meta ──
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             // Poster thumbnail
+                            val posterRequest = remember(movie.posterUrl) {
+                                ImageRequest.Builder(context)
+                                    .data(movie.posterUrl)
+                                    .size(Size(200, 300))
+                                    .precision(Precision.INEXACT)
+                                    .build()
+                            }
                             AsyncImage(
-                                model = movie.posterUrl,
+                                model = posterRequest,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.width(80.dp).height(120.dp).offset(y = (-40).dp)

@@ -15,7 +15,9 @@
 
     <application
         android:name=".NexiPlayApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="NexiPlay"
         android:roundIcon="@mipmap/ic_launcher_round"

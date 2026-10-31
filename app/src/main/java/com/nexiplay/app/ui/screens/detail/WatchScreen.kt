@@ -50,7 +50,6 @@ import com.nexiplay.app.data.SupabaseClient
 import java.util.UUID
 import com.nexiplay.app.ui.theme.themeBg
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.GlobalScope
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import com.nexiplay.app.ui.theme.themeCard
@@ -214,7 +213,7 @@ fun WatchScreen(
                     selectedServerId = matchedServer.id
                     if (matchedServer.id == "toonplay" && type != "movie" && matchedServer.url.startsWith("series-")) {
                         selectedServerUrl = null
-                        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                             val result = com.nexiplay.app.data.util.ToonplayResolver.resolve(
                                 toonplayId = matchedServer.url,
                                 season = state.seasons.getOrNull(nextSeasonIdx)?.seasonNumber ?: 1,
@@ -440,6 +439,9 @@ fun WatchScreen(
                                         WebView(ctx).apply {
                                             settings.javaScriptEnabled = true
                                             settings.domStorageEnabled = true
+                                            settings.databaseEnabled = true
+                                            settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                            settings.setGeolocationEnabled(false)
                                             settings.mediaPlaybackRequiresUserGesture = false
                                             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                             settings.setSupportMultipleWindows(true)
@@ -560,6 +562,8 @@ fun WatchScreen(
                                         try {
                                             webView.stopLoading()
                                             webView.onPause()
+                                            webView.clearHistory()
+                                            webView.clearCache(false)
                                             webView.removeAllViews()
                                             webView.destroy()
                                         } catch (_: Exception) {}
@@ -619,7 +623,7 @@ fun WatchScreen(
                                                         
                                                         if (server.id == "toonplay" && type != "movie" && server.url.startsWith("series-")) {
                                                             android.widget.Toast.makeText(context, "Resolving Stream...", android.widget.Toast.LENGTH_SHORT).show()
-                                                            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                                                                 val result = com.nexiplay.app.data.util.ToonplayResolver.resolve(
                                                                     toonplayId = server.url,
                                                                     season = if (type == "series" || type == "anime") state.seasons.getOrNull(selectedSeasonIdx)?.seasonNumber ?: 1 else 1,
@@ -757,7 +761,7 @@ fun WatchScreen(
                                                         // ToonPlay needs re-resolution on episode switch
                                                         if (matchedServer.id == "toonplay" && type != "movie" && matchedServer.url.startsWith("series-")) {
                                                             selectedServerUrl = null // Show loading state
-                                                            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                                                                 val result = com.nexiplay.app.data.util.ToonplayResolver.resolve(
                                                                     toonplayId = matchedServer.url,
                                                                     season = if (isSeries) state.seasons.getOrNull(selectedSeasonIdx)?.seasonNumber ?: 1 else 1,

@@ -16,7 +16,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.ui.theme.*
 
@@ -38,8 +44,17 @@ fun MovieCard(
                 .clip(RoundedCornerShape(12.dp))
         ) {
             // Poster
+            val context = LocalContext.current
+            val posterRequest = remember(movie.posterUrl) {
+                ImageRequest.Builder(context)
+                    .data(movie.posterUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .crossfade(true)
+                    .build()
+            }
             AsyncImage(
-                model = movie.posterUrl,
+                model = posterRequest,
                 contentDescription = movie.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -146,8 +161,17 @@ fun MovieCardGrid(
                 .aspectRatio(0.68f)
                 .clip(RoundedCornerShape(12.dp))
         ) {
+            val context = LocalContext.current
+            val posterRequest = remember(movie.posterUrl) {
+                ImageRequest.Builder(context)
+                    .data(movie.posterUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .crossfade(true)
+                    .build()
+            }
             AsyncImage(
-                model = movie.posterUrl,
+                model = posterRequest,
                 contentDescription = movie.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

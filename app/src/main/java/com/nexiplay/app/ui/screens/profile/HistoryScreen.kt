@@ -21,7 +21,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.UserEvent
 import com.nexiplay.app.ui.navigation.Screen
@@ -165,6 +169,14 @@ fun HistoryScreen(navController: NavController) {
 
 @Composable
 fun HistoryItem(event: UserEvent, onClick: () -> Unit, onDelete: () -> Unit) {
+    val context = LocalContext.current
+    val posterRequest = remember(event.metadata?.posterUrl) {
+        ImageRequest.Builder(context)
+            .data(event.metadata?.posterUrl)
+            .size(Size(150, 225))
+            .precision(Precision.INEXACT)
+            .build()
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -175,7 +187,7 @@ fun HistoryItem(event: UserEvent, onClick: () -> Unit, onDelete: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         AsyncImage(
-            model = event.metadata?.posterUrl,
+            model = posterRequest,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier

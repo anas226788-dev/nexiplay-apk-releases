@@ -1,12 +1,17 @@
 package com.nexiplay.app
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
+import android.graphics.Bitmap
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.allowRgb565
+import coil3.request.bitmapConfig
 import coil3.request.crossfade
 import com.onesignal.OneSignal
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +42,11 @@ class NexiPlayApp : Application(), SingletonImageLoader.Factory {
     }
 
     // High-performance unified image caching engine for 60/120fps smooth scrolling
+    // Tuned specifically to avoid OutOfMemoryError and UI jank on 2GB RAM devices
     override fun newImageLoader(context: PlatformContext): ImageLoader {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val isLowRam = activityManager?.isLowRamDevice == true
+
         val okHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
@@ -49,16 +58,26 @@ class NexiPlayApp : Application(), SingletonImageLoader.Factory {
             }
             .memoryCache {
                 MemoryCache.Builder()
-                    .maxSizePercent(context, 0.25) // 25% of RAM for instant in-memory poster rendering
+                    // 12% RAM allocation on low-RAM (2GB) phones prevents GC thrashing; 25% on normal phones
+                    .maxSizePercent(context, if (isLowRam) 0.12 else 0.25)
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
                     .directory(context.cacheDir.resolve("image_cache").absolutePath.toPath())
-                    .maxSizeBytes(200L * 1024 * 1024) // 200MB persistent disk cache
+                    .maxSizeBytes(if (isLowRam) 100L * 1024 * 1024 else 200L * 1024 * 1024)
                     .build()
             }
-            .crossfade(true)
+            // RGB_565 decodes pixels as 2 bytes (16-bit) instead of 4 bytes (32-bit), reducing memory by 50%
+            .allowRgb565(isLowRam)
+            .apply {
+                if (isLowRam) {
+                    bitmapConfig(Bitmap.Config.RGB_565)
+                    crossfade(100)
+                } else {
+                    crossfade(200)
+                }
+            }
             .build()
     }
 }

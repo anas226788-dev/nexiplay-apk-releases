@@ -37,6 +37,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.Upcoming
 import com.nexiplay.app.data.model.UpdateItem
@@ -228,10 +231,19 @@ private fun HeroSlider(movies: List<Movie>, onMovieClick: (Movie) -> Unit) {
                     .bounceClick { onMovieClick(movie) }
             ) {
                 // Parallax Background image
+                val context = LocalContext.current
+                val bannerUrl = movie.bannerUrlMobile ?: movie.bannerUrlDesktop ?: movie.posterUrl
+                val bannerRequest = remember(bannerUrl) {
+                    ImageRequest.Builder(context)
+                        .data(bannerUrl)
+                        .size(Size(720, 1080))
+                        .precision(Precision.INEXACT)
+                        .build()
+                }
                 val pageOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
                 
                 AsyncImage(
-                    model = movie.bannerUrlMobile ?: movie.bannerUrlDesktop ?: movie.posterUrl,
+                    model = bannerRequest,
                     contentDescription = movie.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().graphicsLayer {
@@ -444,8 +456,16 @@ private fun RunningCard(movie: Movie, onClick: () -> Unit) {
                 .height(210.dp)
                 .clip(RoundedCornerShape(12.dp))
         ) {
+            val context = LocalContext.current
+            val posterRequest = remember(movie.posterUrl) {
+                ImageRequest.Builder(context)
+                    .data(movie.posterUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .build()
+            }
             AsyncImage(
-                model = movie.posterUrl,
+                model = posterRequest,
                 contentDescription = movie.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -631,7 +651,7 @@ private fun CategoryFilterPills(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        items(types) { (label, key) ->
+        items(types, key = { it.second }) { (label, key) ->
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
@@ -648,7 +668,7 @@ private fun CategoryFilterPills(
             }
         }
 
-        items(categories) { cat ->
+        items(categories, key = { it.id }) { cat ->
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
@@ -757,8 +777,16 @@ private fun LatestUpdateCard(item: UpdateItem, onClick: () -> Unit) {
                 .height(195.dp)
                 .clip(RoundedCornerShape(12.dp))
         ) {
+            val context = LocalContext.current
+            val posterRequest = remember(item.posterUrl) {
+                ImageRequest.Builder(context)
+                    .data(item.posterUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .build()
+            }
             AsyncImage(
-                model = item.posterUrl,
+                model = posterRequest,
                 contentDescription = item.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -903,8 +931,16 @@ private fun UpcomingCard(item: Upcoming, onClick: () -> Unit) {
                 .height(190.dp)
                 .clip(RoundedCornerShape(12.dp))
         ) {
+            val context = LocalContext.current
+            val posterRequest = remember(item.posterUrl) {
+                ImageRequest.Builder(context)
+                    .data(item.posterUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .build()
+            }
             AsyncImage(
-                model = item.posterUrl,
+                model = posterRequest,
                 contentDescription = item.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

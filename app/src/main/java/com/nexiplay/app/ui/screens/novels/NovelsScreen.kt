@@ -34,7 +34,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Novel
 import com.nexiplay.app.ui.components.bounceClick
@@ -411,8 +415,16 @@ private fun NovelCard(novel: Novel, onClick: () -> Unit) {
                 .background(themeCard())
                 .border(1.dp, themeTextTertiary().copy(alpha = 0.15f), RoundedCornerShape(14.dp))
         ) {
+            val context = LocalContext.current
+            val coverRequest = remember(novel.coverUrl) {
+                ImageRequest.Builder(context)
+                    .data(novel.coverUrl)
+                    .size(Size(280, 410))
+                    .precision(Precision.INEXACT)
+                    .build()
+            }
             AsyncImage(
-                model = novel.coverUrl,
+                model = coverRequest,
                 contentDescription = novel.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

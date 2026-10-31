@@ -22,7 +22,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.ui.navigation.Screen
@@ -133,13 +137,21 @@ fun WatchlistScreen(navController: NavController) {
 
 @Composable
 private fun MovieCardGrid(movie: Movie, onClick: () -> Unit) {
+    val context = LocalContext.current
+    val posterRequest = remember(movie.posterUrl) {
+        ImageRequest.Builder(context)
+            .data(movie.posterUrl)
+            .size(Size(280, 410))
+            .precision(Precision.INEXACT)
+            .build()
+    }
     Column(
         modifier = Modifier
             .clickable(onClick = onClick)
             .fillMaxWidth()
     ) {
         AsyncImage(
-            model = movie.posterUrl,
+            model = posterRequest,
             contentDescription = movie.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier
