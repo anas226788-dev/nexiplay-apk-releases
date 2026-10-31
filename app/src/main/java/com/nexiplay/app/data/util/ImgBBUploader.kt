@@ -1,40 +1,45 @@
 package com.nexiplay.app.data.util
 
+import com.nexiplay.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
-import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 object ImgBBUploader {
-    private val client = OkHttpClient()
-    private const val API_KEY = "c0386a7ef3811c25731e5504e51960a4"
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
 
+    /**
+     * Uploads user avatar image directly to NexiPlay Supabase Storage ('posters' bucket).
+     * Bypasses banned third-party image hosts (like ImgBB) and works seamlessly on all ISPs.
+     */
     suspend fun uploadImage(imageBytes: ByteArray): String? = withContext(Dispatchers.IO) {
         try {
-            val requestBody = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart(
-                    "image",
-                    "avatar.jpg",
-                    imageBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
-                )
-                .build()
+            val fileName = "app_avatar_${System.currentTimeMillis()}_${(1000..9999).random()}.jpg"
+            val uploadUrl = "${BuildConfig.SUPABASE_URL}/storage/v1/object/posters/avatars/$fileName"
+
+            val body = imageBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
 
             val request = Request.Builder()
-                .url("https://api.imgbb.com/1/upload?key=$API_KEY")
-                .post(requestBody)
+                .url(uploadUrl)
+                .header("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .header("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .header("Content-Type", "image/jpeg")
+                .header("x-upsert", "true")
+                .post(body)
                 .build()
 
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext null
-            
-            val responseBody = response.body?.string() ?: return@withContext null
-            val json = JSONObject(responseBody)
-            val data = json.optJSONObject("data")
-            return@withContext data?.optString("url")
+            if (response.isSuccessful) {
+                return@withContext "${BuildConfig.SUPABASE_URL}/storage/v1/object/public/posters/avatars/$fileName"
+            }
+            null
         } catch (e: Exception) {
             e.printStackTrace()
             null
