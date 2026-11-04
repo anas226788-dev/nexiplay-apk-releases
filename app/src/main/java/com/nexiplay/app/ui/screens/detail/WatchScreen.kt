@@ -400,7 +400,11 @@ internal fun resolveStreamHttpHeaders(streamUrl: String): Map<String, String> {
             "Referer" to "https://netfilm.world/",
             "Origin" to "https://netfilm.world"
         )
-        lower.contains("vidvault.to") || lower.contains("workers.dev") -> mapOf(
+        lower.contains("flashzipper") || lower.contains("workers.dev") || lower.contains("codedew") -> mapOf(
+            "Referer" to "https://codedew.com/",
+            "Origin" to "https://codedew.com"
+        )
+        lower.contains("vidvault.to") -> mapOf(
             "Referer" to "https://vidvault.to/",
             "Origin" to "https://vidvault.to"
         )
@@ -425,7 +429,8 @@ internal fun resolveStreamHttpHeaders(streamUrl: String): Map<String, String> {
 
 internal fun buildStreamMediaItem(targetUrl: String): MediaItem {
     val lower = targetUrl.lowercase()
-    val isExplicitFile = lower.contains(".mp4") || lower.contains(".mkv") || lower.contains(".webm") || lower.contains("get_video")
+    val isExplicitFile = lower.contains(".mp4") || lower.contains(".mkv") || lower.contains(".webm") ||
+        lower.contains("get_video") || lower.contains("workers.dev") || lower.contains("flashzipper")
     val isHls = !isExplicitFile && (
         lower.contains(".m3u8") ||
             lower.contains("/hls") ||
@@ -438,8 +443,12 @@ internal fun buildStreamMediaItem(targetUrl: String): MediaItem {
     val builder = MediaItem.Builder().setUri(Uri.parse(targetUrl))
     if (isHls) {
         builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-    } else if (isExplicitFile) {
+    } else if (lower.contains(".mp4")) {
         builder.setMimeType(MimeTypes.VIDEO_MP4)
+    } else if (lower.contains(".mkv") || lower.contains("workers.dev") || lower.contains("flashzipper")) {
+        builder.setMimeType(MimeTypes.VIDEO_MATROSKA)
+    } else if (lower.contains(".webm")) {
+        builder.setMimeType(MimeTypes.VIDEO_WEBM)
     }
     return builder.build()
 }
@@ -649,6 +658,9 @@ fun WatchScreen(
             lowerUrl.contains("/playback") ||
             lowerUrl.contains(".mp4") ||
             lowerUrl.contains(".mkv") ||
+            lowerUrl.contains("workers.dev") ||
+            lowerUrl.contains("flashzipper") ||
+            lowerUrl.contains("googleusercontent.com") ||
             lowerUrl.contains("google-proxy") ||
             lowerUrl.contains("proxy-stream") ||
             lowerUrl.contains("as-cdn21.top") ||
@@ -672,12 +684,16 @@ fun WatchScreen(
             } catch (_: Exception) {}
             isResolvingServer = true
             resolveProgress = 0.20f
-            resolveStatusText = "Connecting to RR Nexiplay server..."
+            resolveStatusText = "Connecting to Nexiplay Stream..."
             resolveJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val fallbackCandidates = buildList {
-                    state.movie?.scraperUrl?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("{") }?.let { add(it) }
                     val rawMulti = state.streamingRow?.multiScraperConfig?.takeIf { it.isNotBlank() }
                         ?: if (state.movie?.scraperSource == "multi") state.movie?.scraperUrl else null
+                    if (!rawMulti.isNullOrBlank()) {
+                        val seasonRegex = Regex("\"$sNum\"\\s*:\\s*\"(https?://[^\"]+)\"")
+                        seasonRegex.find(rawMulti)?.groupValues?.getOrNull(1)?.let { add(it) }
+                    }
+                    state.movie?.scraperUrl?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("{") }?.let { add(it) }
                     if (!rawMulti.isNullOrBlank()) {
                         Regex("""https?://[^\s"'\\}]+""").findAll(rawMulti).forEach { m ->
                             val u = m.value.trim()
@@ -728,11 +744,11 @@ fun WatchScreen(
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     isResolvingServer = false
                     val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() }
-                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
-                    fallbackWebEmbedUrl = embed?.takeIf { it != playback }
-                    selectedServerUrl = playback ?: embed ?: rawUrl
+                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() && !it.contains("razorshell.space") && !it.contains("workers.dev") }
+                    fallbackWebEmbedUrl = embed?.takeIf { it != playback && !it.contains("razorshell.space") && !it.contains("workers.dev") }
+                    selectedServerUrl = playback ?: embed ?: (if (rawUrl.contains("razorshell.space")) null else rawUrl)
                     if (playback == null && embed == null) {
-                        android.widget.Toast.makeText(context, "Mirror stream loading... Please tap another server if playback doesn't start.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, "Stream temporarily unavailable on this server. Please choose Server Nexiplay.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -1214,6 +1230,9 @@ fun WatchScreen(
                                 u.contains("/playback") ||
                                 u.contains(".mp4") ||
                                 u.contains(".mkv") ||
+                                u.contains("workers.dev") ||
+                                u.contains("flashzipper") ||
+                                u.contains("googleusercontent.com") ||
                                 u.contains("google-proxy") ||
                                 u.contains("proxy-stream") ||
                                 u.contains("as-cdn21.top") ||
