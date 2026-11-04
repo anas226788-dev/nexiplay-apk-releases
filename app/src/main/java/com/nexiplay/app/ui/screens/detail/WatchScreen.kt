@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -1255,14 +1256,14 @@ fun WatchScreen(
                             if (selectedServerUrl != null && isDirectVideoStream) {
                                 InlineWatchPlayer(
                                     streamUrl = selectedServerUrl!!,
+                                    isFullscreen = isFullscreen,
                                     onVideoEnded = {
                                         if (autoNextEnabled) {
                                             playNextEpisode()
                                         }
                                     },
-                                    onOpenFullscreen = {
-                                        val encoded = java.net.URLEncoder.encode(selectedServerUrl!!, "UTF-8")
-                                        navController.navigate("player/$encoded")
+                                    onToggleFullscreen = {
+                                        isFullscreen = !isFullscreen
                                     },
                                     onPlaybackError = fallbackWebEmbedUrl?.let { fbEmbed ->
                                         {
@@ -1599,12 +1600,7 @@ fun WatchScreen(
                                     highlighted = !isSeries,
                                     modifier = Modifier.weight(1f),
                                     onClick = {
-                                        if (isDirectVideoStream && selectedServerUrl != null) {
-                                            val encoded = java.net.URLEncoder.encode(selectedServerUrl!!, "UTF-8")
-                                            navController.navigate("player/$encoded")
-                                        } else {
-                                            isFullscreen = true
-                                        }
+                                        isFullscreen = true
                                     }
                                 )
                             }
@@ -2318,8 +2314,9 @@ fun WatchScreen(
 @Composable
 private fun InlineWatchPlayer(
     streamUrl: String,
+    isFullscreen: Boolean = false,
     onVideoEnded: () -> Unit,
-    onOpenFullscreen: () -> Unit,
+    onToggleFullscreen: () -> Unit,
     onPlaybackError: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -2547,6 +2544,24 @@ private fun InlineWatchPlayer(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.45f))
             ) {
+                if (isFullscreen) {
+                    IconButton(
+                        onClick = { onToggleFullscreen() },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(14.dp)
+                            .size(36.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Exit Fullscreen",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
                 // Center Play/Pause & Skip Controls
                 Row(
                     modifier = Modifier.align(Alignment.Center),
@@ -2659,12 +2674,16 @@ private fun InlineWatchPlayer(
 
                             IconButton(
                                 onClick = {
-                                    exoPlayer?.pause()
-                                    onOpenFullscreen()
+                                    onToggleFullscreen()
                                 },
                                 modifier = Modifier.size(28.dp)
                             ) {
-                                Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(22.dp))
+                                Icon(
+                                    imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                    contentDescription = if (isFullscreen) "Exit Fullscreen" else "Fullscreen",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                         }
                     }

@@ -1,5 +1,7 @@
 package com.nexiplay.app.ui.screens.detail
 
+import com.nexiplay.app.ui.theme.*
+
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
@@ -40,10 +42,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -64,7 +68,17 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
     val context = LocalContext.current
     val activity = context.findActivity()
     val scope = rememberCoroutineScope()
-    val url = remember { URLDecoder.decode(encodedUrl, StandardCharsets.UTF_8.toString()) }
+    val url = remember {
+        if (encodedUrl.startsWith("http://") || encodedUrl.startsWith("https://")) {
+            encodedUrl
+        } else {
+            try {
+                URLDecoder.decode(encodedUrl, StandardCharsets.UTF_8.toString())
+            } catch (_: Exception) {
+                encodedUrl
+            }
+        }
+    }
 
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
     var trackSelector by remember { mutableStateOf<DefaultTrackSelector?>(null) }
@@ -133,30 +147,36 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
     }
 
     // Lock to landscape & setup ExoPlayer
-    DisposableEffect(Unit) {
+    var triedProxyFallback by remember(url) { mutableStateOf(false) }
+
+    DisposableEffect(url) {
         val originalOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val window = activity?.window
+        val insetsController = if (window != null) {
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        } else null
+        insetsController?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        insetsController?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
         val tSelector = DefaultTrackSelector(context)
         trackSelector = tSelector
 
-        // Tuned LoadControl: cuts buffer memory usage by ~65% to eliminate video stuttering/OOM on 2GB RAM devices
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                15_000, // minBufferMs (15s instead of default 50s)
-                30_000, // maxBufferMs (30s instead of default 50s)
-                1_500,  // bufferForPlaybackMs (1.5s fast start)
-                2_500   // bufferForPlaybackAfterRebufferMs
-            )
-            .setBackBuffer(10_000, false) // immediately frees already played video chunks from RAM
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
+        val headers = resolveStreamHttpHeaders(url)
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(15_000)
+            .setDefaultRequestProperties(headers)
+        val mediaSourceFactory = DefaultMediaSourceFactory(context)
+            .setDataSourceFactory(httpDataSourceFactory)
 
         val player = ExoPlayer.Builder(context)
             .setTrackSelector(tSelector)
-            .setLoadControl(loadControl)
+            .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
-                setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+                setMediaItem(buildStreamMediaItem(url))
                 prepare()
                 playWhenReady = true
             }
@@ -165,6 +185,16 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
                 isPlaying = isPlayingNow
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (!triedProxyFallback && !url.contains("/api/proxy-stream", ignoreCase = true)) {
+                    triedProxyFallback = true
+                    val proxiedUrl = "https://nexiplay.vercel.app/api/proxy-stream?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
+                    player.setMediaItem(buildStreamMediaItem(proxiedUrl))
+                    player.prepare()
+                    player.playWhenReady = true
+                }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -204,6 +234,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
             player.removeListener(listener)
             player.release()
             activity?.requestedOrientation = originalOrientation
+            insetsController?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
             // Reset screen brightness override
             val lp = activity?.window?.attributes
             if (lp != null) {
@@ -317,7 +348,8 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
                             } else {
                                 detectTapGestures(
                                     onDoubleTap = {
-                                        player.seekTo((player.currentPosition + 10000).coerceAtMost(player.duration))
+                                        val targetPos = if (player.duration > 0) (player.currentPosition + 10000).coerceAtMost(player.duration) else player.currentPosition + 10000
+                                        player.seekTo(targetPos)
                                         scope.launch {
                                             showRightSkip = true
                                             delay(800)
@@ -640,7 +672,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
                                         .size(76.dp)
                                         .background(
                                             Brush.radialGradient(
-                                                listOf(NexiRed, Color(0xFFB00610))
+                                                listOf(NexiRedLight, NexiRedDark)
                                             ),
                                             CircleShape
                                         )
@@ -661,7 +693,10 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
 
                             // Forward 10s
                             IconButton(
-                                onClick = { player.seekTo((player.currentPosition + 10000).coerceAtMost(player.duration)) },
+                                onClick = {
+                                    val targetPos = if (player.duration > 0) (player.currentPosition + 10000).coerceAtMost(player.duration) else player.currentPosition + 10000
+                                    player.seekTo(targetPos)
+                                },
                                 modifier = Modifier
                                     .size(54.dp)
                                     .background(Color.Black.copy(alpha = 0.45f), CircleShape)
@@ -740,7 +775,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
             if (showSpeedModal) {
                 AlertDialog(
                     onDismissRequest = { showSpeedModal = false },
-                    containerColor = Color(0xFF161622),
+                    containerColor = DarkSurface,
                     title = {
                         Text("Playback Speed", color = Color.White, fontWeight = FontWeight.Bold, fontFamily = InterFont)
                     },
@@ -837,7 +872,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
             if (showSettings) {
                 ModalBottomSheet(
                     onDismissRequest = { showSettings = false },
-                    containerColor = Color(0xFF14141E),
+                    containerColor = DarkSurface,
                     contentColor = Color.White,
                     dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
                 ) {
