@@ -1420,7 +1420,7 @@ fun WatchScreen(
                                     Card(
                                         shape = RoundedCornerShape(20.dp),
                                         colors = CardDefaults.cardColors(containerColor = Color(0xFF131926).copy(alpha = 0.95f)),
-                                        border = BorderStroke(1.dp, Color(0xFF6366F1).copy(alpha = 0.35f)),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6366F1).copy(alpha = 0.35f)),
                                         modifier = Modifier
                                             .padding(horizontal = 24.dp)
                                             .fillMaxWidth(0.9f)

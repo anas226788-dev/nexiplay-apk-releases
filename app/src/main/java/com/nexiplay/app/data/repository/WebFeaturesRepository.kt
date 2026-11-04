@@ -709,10 +709,10 @@ object WebFeaturesRepository {
         }.filter { it.first.isNotEmpty() }.toList()
 
         if (links.isEmpty()) return null
-        return links.firstOrNull { it.second.contains("watchmultiquality") }?.first
+        return links.firstOrNull { it.second.contains("watchnow") }?.first
+            ?: links.firstOrNull { it.second.contains("watchmultiquality") }?.first
             ?: links.firstOrNull {
-                it.second.contains("watchnow") ||
-                    it.second.contains("watch") ||
+                it.second.contains("watch") ||
                     it.second.contains("stream") ||
                     it.second.contains("player") ||
                     it.second.contains("online")
@@ -1007,13 +1007,19 @@ object WebFeaturesRepository {
             } catch (_: Exception) {}
         }
 
-        // 2. Codedew Zipper page (https://codedew.com/zipper/?url=...) -> extract clean player iframe (argon.razorshell.space/embed/...)
+        // 2. Codedew Zipper / StreamBeta page -> extract clean player iframe or direct stream URL
         if (currentUrl.contains("codedew.com/zipper", ignoreCase = true) ||
-            currentUrl.contains("/zipper/", ignoreCase = true)
+            currentUrl.contains("/zipper/", ignoreCase = true) ||
+            currentUrl.contains("streambeta", ignoreCase = true)
         ) {
             try {
                 val zipperHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 10000)
                 if (!zipperHtml.isNullOrBlank()) {
+                    val streamUrlMatch = Regex(""""stream_url"\s*:\s*"([^"]+)"""").find(zipperHtml)
+                    if (streamUrlMatch != null) {
+                        return@withContext streamUrlMatch.groupValues[1].replace("\\/", "/")
+                    }
+
                     val iframes = extractIframesFromHtml(zipperHtml, currentUrl)
                     val baseEmbedHost = iframes.firstOrNull()?.let {
                         try { java.net.URI(it).host } catch (_: Exception) { null }
