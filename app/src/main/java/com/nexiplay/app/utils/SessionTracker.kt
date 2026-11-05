@@ -24,10 +24,19 @@ data class UserSession(
     val last_seen_at: String? = null
 )
 
+/**
+ * Optimized SessionTracker:
+ * Minimizes database writes to protect Supabase free-tier quotas.
+ * - Tracks session time locally in memory.
+ * - Sends initial session insert on app start.
+ * - Sends final duration update on app exit/background.
+ * - Gentle 10-minute fallback heartbeat only for long active streaming sessions.
+ */
 object SessionTracker {
     private var sessionJob: Job? = null
     private var sessionStartTime = 0L
     private var sessionId = java.util.UUID.randomUUID().toString()
+    private const val HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000L // 10 minutes fallback (reduced from 60s)
 
     fun startSession() {
         if (sessionJob?.isActive == true) return
@@ -37,12 +46,15 @@ object SessionTracker {
         
         sessionJob = CoroutineScope(Dispatchers.IO).launch {
             var user = SupabaseClient.main.auth.currentUserOrNull()
-            while (user == null) {
+            var retries = 0
+            while (user == null && retries < 15) {
                 delay(2000) // Wait for Supabase to restore session or user to log in
                 user = SupabaseClient.main.auth.currentUserOrNull()
+                retries++
             }
+            if (user == null) return@launch
             
-            // Initial insert
+            // 1. Initial session record on app launch
             try {
                 SupabaseClient.main.from("user_sessions").insert(
                     UserSession(
@@ -52,19 +64,18 @@ object SessionTracker {
                         duration_seconds = 0
                     )
                 )
-                // Set online immediately
                 SupabaseClient.main.from("profiles").update(
                     mapOf("last_seen_at" to Clock.System.now().toString())
                 ) {
                     filter { eq("id", user.id) }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Non-fatal analytics error
             }
 
-            // Periodic update
-            while(true) {
-                delay(60000) // update every minute
+            // 2. Low-frequency safety heartbeat (every 10 minutes, protects against ungraceful OS termination)
+            while (true) {
+                delay(HEARTBEAT_INTERVAL_MS)
                 val currentUser = SupabaseClient.main.auth.currentUserOrNull() ?: break
                 val currentDuration = ((System.currentTimeMillis() - sessionStartTime) / 1000).toInt()
                 try {
@@ -77,14 +88,13 @@ object SessionTracker {
                         filter { eq("session_id", activeSessionId) }
                     }
                     
-                    // Update profile's last_seen_at to show as Online
                     SupabaseClient.main.from("profiles").update(
                         mapOf("last_seen_at" to Clock.System.now().toString())
                     ) {
                         filter { eq("id", currentUser.id) }
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    // Non-fatal
                 }
             }
         }
@@ -96,18 +106,32 @@ object SessionTracker {
         
         val finalDuration = ((System.currentTimeMillis() - sessionStartTime) / 1000).toInt()
         val currentSessionId = sessionId
+        
+        // Skip DB update for micro-sessions under 3 seconds
+        if (finalDuration < 3) return
+        
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val now = Clock.System.now().toString()
                 SupabaseClient.main.from("user_sessions").update(
                     buildJsonObject {
                         put("duration_seconds", finalDuration)
-                        put("last_seen_at", Clock.System.now().toString())
+                        put("last_seen_at", now)
                     }
                 ) {
                     filter { eq("session_id", currentSessionId) }
                 }
+                
+                val currentUser = SupabaseClient.main.auth.currentUserOrNull()
+                if (currentUser != null) {
+                    SupabaseClient.main.from("profiles").update(
+                        mapOf("last_seen_at" to now)
+                    ) {
+                        filter { eq("id", currentUser.id) }
+                    }
+                }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Non-fatal
             }
         }
     }
