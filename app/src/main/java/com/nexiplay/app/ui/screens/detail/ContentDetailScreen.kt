@@ -2420,10 +2420,16 @@ fun getAvailableServers(
             "voe" -> servers.add(StreamServer("voe", if (isContentHindi) "Nexi Spark (Hindi Dub)" else "Nexi Spark Server", normalizedUrl, Color(0xFFA855F7), if (isContentHindi) "HINDI DUB" else "SPARK PRO", isContentHindi))
             "vidmoly" -> servers.add(StreamServer("vidmoly", if (isContentHindi) "Vidmoly (Hindi Dub)" else "Vidmoly Server", normalizedUrl, Color(0xFFA78BFA), if (isContentHindi) "HINDI DUB" else "VIDMOLY", isContentHindi))
             "abyss" -> servers.add(StreamServer("abyss", if (isContentHindi) "Nexi Vault (Hindi Dub)" else "Nexi Vault Server", normalizedUrl, Color(0xFF34D399), if (isContentHindi) "HINDI DUB" else "VAULT CDN", isContentHindi))
+            "desidub" -> servers.add(StreamServer("desidub", "Nexi Deshi Server", normalizedUrl, Color(0xFF10B981), "DESHI DUB", true))
+            "desidub_abyss" -> servers.add(StreamServer("desidub_abyss", "Nexi Deshi Server 1 (Abyss)", normalizedUrl, Color(0xFF00E5FF), "DESHI FAST", true))
+            "desidub_filemoon" -> servers.add(StreamServer("desidub_filemoon", "Nexi Deshi Server 2 (Filemoon)", normalizedUrl, Color(0xFFFF4081), "DESHI HD", true))
+            "desidub_streamtape" -> servers.add(StreamServer("desidub_streamtape", "Nexi Deshi Server 3 (Streamtape)", normalizedUrl, Color(0xFF38BDF8), "DESHI STREAM", true))
+            "desidub_earnvids" -> servers.add(StreamServer("desidub_earnvids", "Nexi Deshi Server 4 (Earnvids)", normalizedUrl, Color(0xFF2DD4BF), "DESHI ULTRA", true))
+            "desidub_doodstream" -> servers.add(StreamServer("desidub_doodstream", "Nexi Deshi Server 5 (Doodstream)", normalizedUrl, Color(0xFFFBBF24), "DESHI TURBO", true))
             "custom" -> servers.add(StreamServer("custom", if (isContentHindi) "Server Nexiplay (Hindi)" else "Server Nexiplay", normalizedUrl, Color(0xFFFFB878), if (isContentHindi) "HINDI DUB" else "DIRECT CDN", isContentHindi))
             "legacy" -> servers.add(StreamServer("custom_legacy", if (isContentHindi) "Server Nexiplay Legacy (Hindi)" else "Server Nexiplay Legacy", normalizedUrl, Color(0xFFFFB878), if (isContentHindi) "HINDI DUB" else "DIRECT CDN", isContentHindi))
             else -> {
-                val isHindi = isContentHindi || key in listOf("toonstream", "rareanimes", "toonplay", "animekhor", "screenscape", "multiembed", "vixsrc", "twoembed", "anyembed", "atlantic") || key.contains("hindi", ignoreCase = true)
+                val isHindi = isContentHindi || key in listOf("toonstream", "rareanimes", "toonplay", "animekhor", "screenscape", "multiembed", "vixsrc", "twoembed", "anyembed", "atlantic", "desidub", "desidub_abyss", "desidub_filemoon", "desidub_streamtape", "desidub_earnvids", "desidub_doodstream") || key.contains("hindi", ignoreCase = true) || key.contains("desidub", ignoreCase = true)
                 servers.add(
                     StreamServer(
                         id = key,

@@ -3,6 +3,7 @@ package com.nexiplay.app.ui.screens.chatbot
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nexiplay.app.data.model.ChatApiResponse
+import com.nexiplay.app.data.model.ChatContentResult
 import com.nexiplay.app.data.model.ChatMessage
 import com.nexiplay.app.data.model.ChatStreamStep
 import com.nexiplay.app.data.model.ChatbotSettings

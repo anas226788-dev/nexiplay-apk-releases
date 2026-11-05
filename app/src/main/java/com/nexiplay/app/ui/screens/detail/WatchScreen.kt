@@ -315,6 +315,7 @@ private fun resolveWebViewReferer(targetUrl: String): String {
     val lower = targetUrl.lowercase()
     return when {
         lower.contains("razorshell.space") || lower.contains("seekplayer") -> "https://codedew.com/"
+        lower.contains("desidub") || lower.contains("bysetayico") || lower.contains("morencius") || lower.contains("hanerix") || lower.contains("filesforever") || lower.contains("iqsmartgames") -> "https://www.desidubanime.me/"
         lower.contains("codedew.com") || lower.contains("rareanimes") || lower.contains("raretoons") -> "https://rareanimes.net/"
         lower.contains("zephyrflick") || lower.contains("toonstream") -> "https://toonstream.vip/"
         lower.contains("watchanimeworld") || lower.contains("animeworld") -> "https://watchanimeworld.in/"
@@ -347,6 +348,7 @@ private val ALLOWED_PLAYER_HOSTS = listOf(
     "rubystm", "dood", "mixdrop", "voe", "uqload", "streamtape", "mp4upload",
     "abyss", "short.ink", "abyssplayer", "ashleyhardat", "shannoncoldalready", "rendingdecreasehere", "playmogo", "ds2play",
     "circleftp", "moviebox", "aoneroom", "animekhor", "miruro", "aniclover",
+    "desidub", "bysetayico", "morencius", "hanerix", "filesforever", "iqsmartgames", "strp2p", "rpmstream", "upns.live",
     "upcloud", "flixer", "vidnest", "primesrc", "vidspark", "vidstuck", "vidmoly",
     "medmedia", "vidup", "ythd", "soap2day", "soapgate", "streamta.pe",
     "iamcdn.net", "vibeplayer.site", "takutakutaku.workers.dev", "groovy.monster", "nexiplay.vercel.app"
