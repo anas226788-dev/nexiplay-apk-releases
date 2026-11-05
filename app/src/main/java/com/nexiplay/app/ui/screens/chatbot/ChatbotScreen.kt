@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +38,7 @@ import com.nexiplay.app.data.model.ChatContentResult
 import com.nexiplay.app.data.model.ChatMessage
 import com.nexiplay.app.data.model.ChatStreamStep
 import com.nexiplay.app.data.model.ChatTMDBInfo
+import com.nexiplay.app.ui.components.NexiSvgIcons
 import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
 import kotlinx.coroutines.delay
@@ -108,15 +108,22 @@ fun ChatbotScreen(
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                         }
 
-                        // Bot Avatar — App Icon
-                        Image(
-                            painter = painterResource(id = R.mipmap.ic_launcher),
-                            contentDescription = "NexiPlay",
+                        // Bot Avatar — Cybernetic AI Robot Icon (Zero crash risk)
+                        Box(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(CircleShape)
-                                .border(1.5.dp, Color.White.copy(alpha = 0.4f), CircleShape)
-                        )
+                                .background(Color.White.copy(alpha = 0.18f))
+                                .border(1.5.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = NexiSvgIcons.Bot,
+                                contentDescription = "NexiBot AI",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
 
                         // Bot Title & Status
                         Column {
