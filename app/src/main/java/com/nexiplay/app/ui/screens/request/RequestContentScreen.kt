@@ -145,6 +145,11 @@ fun RequestContentScreen(navController: NavController) {
             // Submit
             Button(
                 onClick = {
+                    val currentUser = SupabaseClient.main.auth.currentUserOrNull()
+                    if (currentUser == null) {
+                        error = "Please login first to request content"
+                        return@Button
+                    }
                     loading = true
                     error = null
                     android.widget.Toast.makeText(context, "Loading Ad...", android.widget.Toast.LENGTH_SHORT).show()
@@ -174,7 +179,7 @@ fun RequestContentScreen(navController: NavController) {
                                     SupabaseClient.main.from("content_requests").insert(insertMap)
                                     submitted = true
                                 } catch (e: Exception) {
-                                    error = e.message ?: "Failed to submit"
+                                    error = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't submit your request. Please try again.")
                                 }
                                 loading = false
                             }

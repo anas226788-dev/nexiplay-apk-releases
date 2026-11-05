@@ -41,6 +41,7 @@ import androidx.navigation.NavController
 import coil3.compose.AsyncImage
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.UserProfile
+import com.nexiplay.app.ui.components.NexiSvgIcons
 import com.nexiplay.app.ui.components.ShimmerBox
 import com.nexiplay.app.ui.components.bounceClick
 import com.nexiplay.app.ui.navigation.Screen
@@ -68,6 +69,9 @@ fun ProfileScreen(navController: NavController) {
     val context = LocalContext.current
 
     var isLeaderboardEnabled by remember { mutableStateOf(true) }
+    var watchlistCount by remember { mutableIntStateOf(0) }
+    var streamedCount by remember { mutableIntStateOf(0) }
+    var totalWatchSeconds by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         // Check leaderboard toggle in app_settings
@@ -114,6 +118,38 @@ fun ProfileScreen(navController: NavController) {
             } catch (e: Exception) { 
                 e.printStackTrace()
             }
+
+            // Load Website Account Activity Hub Stats (My List + Streamed + Watch Time)
+            try {
+                val webList = try {
+                    SupabaseClient.main.from("user_watchlist")
+                        .select(Columns.list("movie_id")) { filter { eq("user_id", user.id) } }
+                        .decodeList<kotlinx.serialization.json.JsonObject>()
+                        .mapNotNull { it["movie_id"]?.jsonPrimitive?.contentOrNull }
+                } catch (_: Exception) { emptyList() }
+                val appList = try {
+                    SupabaseClient.main.from("watchlist")
+                        .select(Columns.list("movie_id")) { filter { eq("user_id", user.id) } }
+                        .decodeList<kotlinx.serialization.json.JsonObject>()
+                        .mapNotNull { it["movie_id"]?.jsonPrimitive?.contentOrNull }
+                } catch (_: Exception) { emptyList() }
+                watchlistCount = (webList + appList).distinct().size
+            } catch (_: Exception) {}
+
+            try {
+                val watchEvents = SupabaseClient.main.from("user_events")
+                    .select(Columns.list("movie_id", "duration_seconds")) {
+                        filter {
+                            eq("user_id", user.id)
+                            eq("event_type", "watch")
+                        }
+                    }
+                    .decodeList<kotlinx.serialization.json.JsonObject>()
+                streamedCount = watchEvents.mapNotNull { it["movie_id"]?.jsonPrimitive?.contentOrNull }.distinct().size
+                totalWatchSeconds = watchEvents.sumOf {
+                    it["duration_seconds"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                }
+            } catch (_: Exception) {}
         }
         loading = false
     }
@@ -154,7 +190,7 @@ fun ProfileScreen(navController: NavController) {
                                 Toast.makeText(context, "Profile photo updated!", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 e.printStackTrace()
-                                Toast.makeText(context, "DB Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your profile. Please try again."), Toast.LENGTH_LONG).show()
                             }
                         }
                     } else {
@@ -207,7 +243,7 @@ fun ProfileScreen(navController: NavController) {
                                 Toast.makeText(context, "Name updated!", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 e.printStackTrace()
-                                Toast.makeText(context, "DB Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your profile. Please try again."), Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -301,10 +337,127 @@ fun ProfileScreen(navController: NavController) {
                             isUploading = isUploading
                         )
 
+                        // ── Website Activity Hub Stats Overview (My List / Streamed / Watch Time) ──
+                        val hours = totalWatchSeconds / 3600
+                        val mins = (totalWatchSeconds % 3600) / 60
+                        val watchTimeStr = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            listOf(
+                                Triple("My List", "$watchlistCount", Color(0xFFE50914)),
+                                Triple("Streamed", "$streamedCount", Color(0xFF10B981)),
+                                Triple("Watch Time", watchTimeStr, Color(0xFFF59E0B))
+                            ).forEach { (label, value, accent) ->
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(themeCard())
+                                        .border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        value,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = themeTextPrimary(),
+                                        fontFamily = InterFont
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        label.uppercase(),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = accent,
+                                        letterSpacing = 0.8.sp,
+                                        fontFamily = InterFont
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(Modifier.height(8.dp))
                         HorizontalDivider(color = themeBorder(), modifier = Modifier.padding(horizontal = 16.dp))
                         Spacer(Modifier.height(8.dp))
                     }
+
+                    // ── Website Entertainment Hub Shortcuts (100% SVG Vector Tiles) ──
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            Triple("Live TV", NexiSvgIcons.LiveTv to Color(0xFFEF4444), Screen.LiveTv.route),
+                            Triple("Novels", NexiSvgIcons.Novels to Color(0xFFF59E0B), Screen.Novels.route),
+                            Triple("Arcade", NexiSvgIcons.Gamepad to Color(0xFF10B981), Screen.Games.route),
+                            Triple("AI Vibe", NexiSvgIcons.VibeSparkles to Color(0xFF8B5CF6), Screen.VibeCheck.route)
+                        ).forEach { (title, iconWithColor, route) ->
+                            val (icon, accent) = iconWithColor
+                            val cardShape = RoundedCornerShape(13.dp)
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(cardShape)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = if (isDark) {
+                                                listOf(
+                                                    accent.copy(alpha = 0.16f),
+                                                    DarkCard.copy(alpha = 0.94f)
+                                                )
+                                            } else {
+                                                listOf(
+                                                    accent.copy(alpha = 0.12f),
+                                                    Color.White
+                                                )
+                                            }
+                                        )
+                                    )
+                                    .border(
+                                        1.dp,
+                                        accent.copy(alpha = if (isDark) 0.32f else 0.25f),
+                                        cardShape
+                                    )
+                                    .bounceClick { navController.navigate(route) }
+                                    .padding(vertical = 11.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(accent.copy(alpha = if (isDark) 0.22f else 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = title,
+                                        tint = accent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(Modifier.height(5.dp))
+                                Text(
+                                    text = title,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = themeTextPrimary(),
+                                    fontFamily = InterFont,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
 
                     // ── Menu Items ──
                     if (isLeaderboardEnabled) {
@@ -314,13 +467,13 @@ fun ProfileScreen(navController: NavController) {
                     }
 
                     if (isLoggedIn) {
-                        ProfileMenuItem(Icons.Default.Bookmark, "Watchlist", "Your saved content") {
+                        ProfileMenuItem(Icons.Default.Bookmark, "Watchlist", "Your saved content ($watchlistCount)") {
                             navController.navigate(Screen.Watchlist.route)
                         }
                         ProfileMenuItem(Icons.Default.FileDownload, "My Downloads", "Downloaded offline files") {
                             navController.navigate("downloads")
                         }
-                        ProfileMenuItem(Icons.Default.History, "Watch History", "Recently watched") {
+                        ProfileMenuItem(Icons.Default.History, "Watch History", "Recently watched ($streamedCount)") {
                             navController.navigate("history")
                         }
                         ProfileMenuItem(Icons.Default.Comment, "My Comments", "Your comments") {
@@ -351,7 +504,15 @@ fun ProfileScreen(navController: NavController) {
                                 .fillMaxWidth()
                                 .bounceClick(onClick = {
                                     scope.launch {
-                                        SupabaseClient.main.auth.signOut()
+                                        try {
+                                            SupabaseClient.main.auth.signOut()
+                                        } catch (_: Exception) {}
+                                        try {
+                                            com.onesignal.OneSignal.logout()
+                                        } catch (_: Exception) {}
+                                        com.nexiplay.app.data.util.AdManager.userBadgeType = ""
+                                        com.nexiplay.app.data.util.AdManager.badgeExpiresAt = null
+                                        com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(context, null)
                                         navController.navigate(Screen.Home.route) {
                                             popUpTo(0) { inclusive = true }
                                         }
@@ -386,8 +547,17 @@ fun ProfileScreen(navController: NavController) {
 // ── Elite Profile Header (pixel-perfect match to HTML reference) ──
 @Composable
 private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, onEditName: () -> Unit, isUploading: Boolean) {
-    val isElite = profile?.vipBadge == "gold_vip" || profile?.vipBadge == "elite_pro"
-    val isVip = isElite || profile?.vipBadge == "vip"
+    val isBadgeActive = remember(profile?.vipBadgeExpires) {
+        val expStr = profile?.vipBadgeExpires
+        if (expStr.isNullOrBlank()) true
+        else {
+            val exp = com.nexiplay.app.data.util.AdManager.parseDateRobust(expStr)
+            exp == null || exp.isAfter(java.time.Instant.now())
+        }
+    }
+    val activeBadge = if (isBadgeActive) profile?.vipBadge else null
+    val isElite = activeBadge == "gold_vip" || activeBadge == "elite_pro"
+    val isVip = isElite || activeBadge == "vip"
 
     val infiniteTransition = rememberInfiniteTransition(label = "vip_anim")
 
@@ -428,7 +598,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                 val glowBrush = if (isElite) {
                     Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFFA78BFA).copy(alpha = glowAlpha),
+                            Color(0xFFB09AFF).copy(alpha = glowAlpha),
                             Color(0xFF7EE8FA).copy(alpha = glowAlpha * 0.6f),
                             Color.Transparent
                         )
@@ -436,7 +606,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                 } else {
                     Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFFF6C453).copy(alpha = glowAlpha),
+                            Color(0xFFFFB878).copy(alpha = glowAlpha),
                             Color.Transparent
                         )
                     )
@@ -453,7 +623,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
             // CSS: filter:drop-shadow(0 0 14px rgba(246,196,83,.6))
             // Android shadow() doesn't do colored glow, so we use a blurred colored circle
             if (isElite || isVip) {
-                val dropShadowColor = if (isElite) Color(0xFFA78BFA) else Color(0xFFF6C453)
+                val dropShadowColor = if (isElite) Color(0xFFB09AFF) else Color(0xFFFFB878)
                 val dropShadowAlpha = if (isElite) 0.8f else 0.6f
                 Box(
                     modifier = Modifier
@@ -483,9 +653,9 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                 label = "ringA"
             )
             val ringColors = if (isElite) {
-                listOf(Color(0xFF7EE8FA), Color(0xFFA78BFA), Color(0xFFF472B6), Color.White, Color(0xFF7EE8FA))
+                listOf(Color(0xFF7EE8FA), Color(0xFFB09AFF), Color(0xFFF472B6), Color.White, Color(0xFF7EE8FA))
             } else if (isVip) {
-                listOf(Color(0xFFF6C453), Color(0xFFFFF3C4), Color(0xFFB8860B), Color(0xFFFFE9A8), Color(0xFFF6C453))
+                listOf(Color(0xFFFFB878), Color(0xFFFFE8D4), Color(0xFFD98A4B), Color(0xFFFFE9A8), Color(0xFFFFB878))
             } else {
                 listOf(NexiRed, NexiGradientEnd, NexiRedLight, GoldVip, NexiRed)
             }
@@ -516,9 +686,9 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                     label = "satA"
                 )
                 val satColors = if (isElite)
-                    listOf(Color(0xFF7EE8FA), Color(0xFFA78BFA), Color(0xFFF472B6))
+                    listOf(Color(0xFF7EE8FA), Color(0xFFB09AFF), Color(0xFFF472B6))
                 else
-                    listOf(Color(0xFFF6C453), Color(0xFFF6C453), Color(0xFFF6C453))
+                    listOf(Color(0xFFFFB878), Color(0xFFFFB878), Color(0xFFFFB878))
                 val satSize = if (isElite) 5.dp else 6.dp
                 val satGlowSize = if (isElite) 16.dp else 14.dp
 
@@ -579,7 +749,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                     val spks = listOf(
                         Spk(35f, 6f, Color(0xFF7EE8FA), 0),   // top:4% left:22%
                         Spk(147f, 26f, Color(0xFFF472B6), 1),  // top:16% right:4%
-                        Spk(3f, 131f, Color(0xFFA78BFA), 1),   // bottom:8% left:2%
+                        Spk(3f, 131f, Color(0xFFB09AFF), 1),   // bottom:8% left:2%
                         Spk(131f, 150f, Color.White, 0)         // bottom:2% right:16%
                     )
                     spks.forEach { s ->
@@ -623,7 +793,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                         .offset(y = 6.dp)
                 ) {
                     val textStr = if (isElite) "PRO" else "VIP"
-                    val textColor = if (isElite) null else Color(0xFFFFD666) // brighter gold
+                    val textColor = if (isElite) null else Color(0xFFFFD6AA) // brighter gold
                     val textBrush = if (isElite) Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFF472B6))) else null
 
                     Row(
@@ -750,11 +920,11 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                 Spacer(Modifier.width(10.dp))
 
                 val pillBg = if (isElite) {
-                    Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA78BFA), Color(0xFFF472B6)))
+                    Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFB09AFF), Color(0xFFF472B6)))
                 } else {
-                    Brush.linearGradient(listOf(Color(0xFFAA7B0A), Color(0xFFFFD666), Color(0xFFAA7B0A)))
+                    Brush.linearGradient(listOf(Color(0xFFAA7B0A), Color(0xFFFFD6AA), Color(0xFFAA7B0A)))
                 }
-                val pillShadowColor = if (isElite) Color(0xFFA78BFA) else Color(0xFFF6C453)
+                val pillShadowColor = if (isElite) Color(0xFFB09AFF) else Color(0xFFFFB878)
                 val pillFg = if (isElite) Color(0xFF150826) else Color(0xFF1C1300)
                 val pillText = if (isElite) "ELITE" else "VIP"
                 val pillIcon = if (isElite) Icons.Default.Star else Icons.Default.WorkspacePremium
@@ -871,7 +1041,7 @@ private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, 
                 text = "Referral: ${profile.referralCode}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFF6C453),
+                color = Color(0xFFFFB878),
                 letterSpacing = 0.3.sp
             )
         }

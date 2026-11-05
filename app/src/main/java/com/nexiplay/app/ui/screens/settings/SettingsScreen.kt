@@ -156,7 +156,7 @@ fun SettingsScreen(navController: NavController) {
                                         mapOf("hide_nsfw" to checked)
                                     ) { filter { eq("id", userId) } }
                                 } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, "Failed to update setting: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update this setting. Please try again."), android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -320,7 +320,7 @@ fun SettingsScreen(navController: NavController) {
                                     android.widget.Toast.makeText(context, "Confirmation email sent to new address!", android.widget.Toast.LENGTH_LONG).show()
                                     showChangeEmailDialog = false
                                 } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, e.message ?: "Failed to update email", android.widget.Toast.LENGTH_LONG).show()
+                                    android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your email. Please try again."), android.widget.Toast.LENGTH_LONG).show()
                                 } finally { isUpdating = false }
                             }
                         },
@@ -374,7 +374,7 @@ fun SettingsScreen(navController: NavController) {
                                     android.widget.Toast.makeText(context, "Password updated successfully!", android.widget.Toast.LENGTH_SHORT).show()
                                     showChangePasswordDialog = false
                                 } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, e.message ?: "Failed to update password", android.widget.Toast.LENGTH_LONG).show()
+                                    android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your password. Please try again."), android.widget.Toast.LENGTH_LONG).show()
                                 } finally { isUpdating = false }
                             }
                         },
@@ -438,7 +438,7 @@ fun SettingsScreen(navController: NavController) {
                                     android.widget.Toast.makeText(context, "WhatsApp number updated successfully!", android.widget.Toast.LENGTH_SHORT).show()
                                     showWhatsAppDialog = false
                                 } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, e.message ?: "Failed to update WhatsApp number", android.widget.Toast.LENGTH_LONG).show()
+                                    android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your phone number. Please try again."), android.widget.Toast.LENGTH_LONG).show()
                                 } finally { isUpdating = false }
                             }
                         },

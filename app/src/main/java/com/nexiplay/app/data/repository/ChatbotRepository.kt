@@ -57,23 +57,27 @@ object ChatbotRepository {
                 connection.readTimeout = 60000
                 connection.doOutput = true
 
-                // Build request body
-                val historyJson = buildString {
-                    append("[")
-                    history.forEachIndexed { index, entry ->
-                        if (index > 0) append(",")
-                        val role = entry["role"]?.replace("\"", "\\\"") ?: ""
-                        val content = entry["content"]?.replace("\"", "\\\"")?.replace("\n", "\\n") ?: ""
-                        append("""{"role":"$role","content":"$content"}""")
-                    }
-                    append("]")
-                }
-
+                // Build request body safely using kotlinx.serialization.json
                 val currentUser = SupabaseClient.main.auth.currentUserOrNull()
-                val userIdStr = currentUser?.id?.let { "\"$it\"" } ?: "null"
-                val userEmailStr = currentUser?.email?.let { "\"$it\"" } ?: "null"
-
-                val requestBody = """{"message":"${message.replace("\"", "\\\"").replace("\n", "\\n")}","history":$historyJson,"streaming":false,"user_id":$userIdStr,"user_email":$userEmailStr}"""
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("message", kotlinx.serialization.json.JsonPrimitive(message))
+                    put(
+                        "history",
+                        kotlinx.serialization.json.buildJsonArray {
+                            history.forEach { entry ->
+                                add(
+                                    kotlinx.serialization.json.buildJsonObject {
+                                        put("role", kotlinx.serialization.json.JsonPrimitive(entry["role"] ?: ""))
+                                        put("content", kotlinx.serialization.json.JsonPrimitive(entry["content"] ?: ""))
+                                    }
+                                )
+                            }
+                        }
+                    )
+                    put("streaming", kotlinx.serialization.json.JsonPrimitive(false))
+                    put("user_id", kotlinx.serialization.json.JsonPrimitive(currentUser?.id))
+                    put("user_email", kotlinx.serialization.json.JsonPrimitive(currentUser?.email))
+                }.toString()
 
                 OutputStreamWriter(connection.outputStream, "UTF-8").use { writer ->
                     writer.write(requestBody)
@@ -96,7 +100,7 @@ object ChatbotRepository {
                 ChatApiResponse(
                     reply = "Sorry, I'm having trouble connecting right now. Please check your internet and try again! 🙏",
                     intent = "general",
-                    error = e.message
+                    error = com.nexiplay.app.ui.util.UserFacingError.from(e, "The assistant couldn't reply. Please try again.")
                 )
             }
         }

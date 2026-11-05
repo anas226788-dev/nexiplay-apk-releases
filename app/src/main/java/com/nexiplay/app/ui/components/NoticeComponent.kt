@@ -118,6 +118,13 @@ fun NoticeVideoPlayer(videoUrl: String) {
                     """.trimIndent()
                     loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "UTF-8", null)
                 }
+            },
+            onRelease = { webView ->
+                try {
+                    webView.loadUrl("about:blank")
+                    webView.onPause()
+                    webView.destroy()
+                } catch (_: Exception) {}
             }
         )
     } else {

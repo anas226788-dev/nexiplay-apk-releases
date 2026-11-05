@@ -1,669 +1,1029 @@
 package com.nexiplay.app.ui.screens.home
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import android.app.Activity
-import androidx.compose.ui.platform.LocalContext
-import com.nexiplay.app.data.util.AdManager
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import com.nexiplay.app.ui.components.InlineNotice
-import com.nexiplay.app.ui.viewmodels.GlobalNoticeViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.size.Precision
-import coil3.size.Size
+import com.nexiplay.app.R
+import com.nexiplay.app.data.model.Category
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.Upcoming
 import com.nexiplay.app.data.model.UpdateItem
 import com.nexiplay.app.ui.components.MovieCard
+import com.nexiplay.app.ui.components.NexiSvgIcons
+import com.nexiplay.app.ui.components.ShimmerBox
 import com.nexiplay.app.ui.components.bounceClick
-import com.nexiplay.app.ui.components.shimmerEffect
+import com.nexiplay.app.ui.components.rememberPosterImageRequest
 import com.nexiplay.app.ui.navigation.Screen
+import com.nexiplay.app.ui.screens.browse.BrowseViewModel
 import com.nexiplay.app.ui.theme.*
 import kotlinx.coroutines.delay
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.ExperimentalMaterial3Api
-import com.nexiplay.app.ui.screens.notifications.NotificationViewModel
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+private const val DEFAULT_TELEGRAM_URL = "https://t.me/+WNS6y-6tB94xNDVl"
+
+private data class WebsiteTypeTab(
+    val label: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit
+)
+
+private data class WebsiteDrawerLink(
+    val label: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val accent: Color,
+    val onClick: () -> Unit
+)
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     navController: NavController,
-    vm: HomeViewModel = viewModel(),
-    notifVm: NotificationViewModel = viewModel()
+    vm: HomeViewModel = viewModel()
 ) {
     val state by vm.state.collectAsState()
-    val notifState by notifVm.state.collectAsState()
-    val unreadCount = notifState.notifications.count { !it.isRead }
-    val activity = LocalContext.current as? Activity
+    val context = LocalContext.current
+    var showWebsiteMenuSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.updates) {
+        if (state.updates.isNotEmpty()) {
+            com.nexiplay.app.data.util.EpisodeUpdatesNotificationManager.checkAndNotifyWithItems(context, state.updates)
+        }
+    }
+
+    val openTelegram = {
+        val url = state.telegramUrl ?: DEFAULT_TELEGRAM_URL
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {}
+    }
+
+    val navigateToBrowseTab: (Int) -> Unit = { tabIndex ->
+        BrowseViewModel.navigateWithFilter(tab = tabIndex, categorySlug = null)
+        navController.navigate(Screen.Browse.route) {
+            launchSingleTop = true
+        }
+    }
+
+    val navigateToCategory: (String?) -> Unit = { slug ->
+        BrowseViewModel.navigateWithFilter(tab = 0, categorySlug = slug)
+        navController.navigate(Screen.Browse.route) {
+            launchSingleTop = true
+        }
+    }
+
+    // Website Hamburger Navigation Sheet (`Header.tsx` mobile menu)
+    if (showWebsiteMenuSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showWebsiteMenuSheet = false },
+            containerColor = themeSurface(),
+            contentColor = themeTextPrimary(),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = themeBorderStrong()) }
+        ) {
+            WebsiteNavigationDrawerContent(
+                telegramText = state.telegramText,
+                onDismiss = { showWebsiteMenuSheet = false },
+                onNavigateRoute = { route ->
+                    showWebsiteMenuSheet = false
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+                onNavigateBrowseTab = { tab ->
+                    showWebsiteMenuSheet = false
+                    navigateToBrowseTab(tab)
+                },
+                onOpenTelegram = {
+                    showWebsiteMenuSheet = false
+                    openTelegram()
+                }
+            )
+        }
+    }
 
     PullToRefreshBox(
         isRefreshing = state.isRefreshing,
         onRefresh = { vm.loadHome(isRefresh = true) },
-        modifier = Modifier.fillMaxSize()
-    ) {
-
-    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(themeBg())
-            .verticalScroll(rememberScrollState())
     ) {
-        // ── Top Bar ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("NexiPlay", fontFamily = InterFont, fontSize = 24.sp, fontWeight = FontWeight.Black, color = NexiRed)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = { navController.navigate(Screen.Search.route) }) {
-                    Icon(Icons.Default.Search, "Search", tint = themeTextPrimary())
-                }
-                IconButton(onClick = { navController.navigate(Screen.Notifications.route) }) {
-                    if (unreadCount > 0) {
-                        BadgedBox(
-                            badge = {
-                                Badge(containerColor = NexiRed) {
-                                    Text(unreadCount.toString(), color = Color.White)
+        Column(modifier = Modifier.fillMaxSize()) {
+            // ── Website Sticky Glass Header (`src/components/Header.tsx`) ──
+            WebsiteTopHeader(
+                onSearchClick = { navController.navigate(Screen.Search.route) },
+                onNotificationsClick = { navController.navigate(Screen.Notifications.route) },
+                onTelegramClick = openTelegram,
+                onMenuClick = { showWebsiteMenuSheet = true }
+            )
+
+            if (state.isLoading && state.trending.isEmpty() && state.latestAdditions.isEmpty()) {
+                HomeLoadingSkeleton()
+            } else if (state.error != null && state.trending.isEmpty() && state.latestAdditions.isEmpty()) {
+                HomeErrorView(
+                    message = state.error ?: "Couldn't load content.",
+                    onRetry = { vm.loadHome(isRefresh = false) }
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 28.dp)
+                ) {
+                    // 1. Website Full-Bleed Hero Slider (`src/components/HeroSlider.tsx`)
+                    if (state.trending.isNotEmpty()) {
+                        item(key = "hero_slider") {
+                            WebsiteHeroSlider(
+                                movies = state.trending.take(6),
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 2. Website Neumorphic Inset Search Bar (`src/app/(site)/page.tsx` line 183)
+                    item(key = "inset_search_bar") {
+                        WebsiteInsetSearchBar(
+                            onClick = { navController.navigate(Screen.Search.route) }
+                        )
+                    }
+
+                    // 3. Website Segmented TypeTabs Bar (`src/app/(site)/page.tsx` lines 69-105)
+                    item(key = "website_type_tabs") {
+                        WebsiteTypeTabsBar(
+                            onSelectBrowseTab = navigateToBrowseTab,
+                            onNavigate = { route ->
+                                navController.navigate(route) { launchSingleTop = true }
+                            }
+                        )
+                    }
+
+                    // 4. Website CategoryMenu Genre Chips (`src/components/CategoryMenu.tsx`)
+                    if (state.categories.isNotEmpty()) {
+                        item(key = "website_category_menu") {
+                            WebsiteCategoryMenuRow(
+                                categories = state.categories,
+                                onCategoryClick = navigateToCategory
+                            )
+                        }
+                    }
+
+                    // 5. Website Feature Hub (Live TV, Vibe Check, Games)
+                    item(key = "website_feature_banners") {
+                        WebsiteFeatureBannersSection(
+                            onLiveTvClick = { navController.navigate(Screen.LiveTv.route) },
+                            onVibeCheckClick = { navController.navigate(Screen.VibeCheck.route) },
+                            onGamesClick = { navController.navigate(Screen.Games.route) }
+                        )
+                    }
+
+                    // 6. Latest Updates Section (`src/components/LatestUpdates.tsx`)
+                    if (state.updates.isNotEmpty()) {
+                        item(key = "updates_section") {
+                            WebsiteLatestUpdatesSection(
+                                updates = state.updates,
+                                onUpdateClick = { update ->
+                                    val rawSlug = update.slug.trim().removePrefix("/")
+                                    if (rawSlug.isNotBlank()) {
+                                        val (resolvedType, resolvedSlug) = if (rawSlug.contains("/")) {
+                                            val parts = rawSlug.split("/", limit = 2)
+                                            parts[0].ifBlank { update.contentType ?: "movie" } to parts[1]
+                                        } else {
+                                            (update.contentType ?: "movie") to rawSlug
+                                        }
+
+                                        if (resolvedSlug.isNotBlank()) {
+                                            navController.navigate(
+                                                Screen.ContentDetail.createRoute(resolvedType, resolvedSlug)
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // 7. Upcoming Releases Section (`src/components/UpcomingSlider.tsx`)
+                    if (state.upcoming.isNotEmpty()) {
+                        item(key = "upcoming_section") {
+                            Spacer(modifier = Modifier.height(22.dp))
+                            WebsiteSectionHeader(title = "Upcoming Releases")
+                            Spacer(modifier = Modifier.height(10.dp))
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(state.upcoming, key = { it.id }) { item ->
+                                    WebsiteUpcomingCard(item = item)
                                 }
                             }
-                        ) {
-                            Icon(Icons.Default.Notifications, "Notifications", tint = themeTextPrimary())
                         }
-                    } else {
-                        Icon(Icons.Default.Notifications, "Notifications", tint = themeTextPrimary())
+                    }
+
+                    // 8. Trending Now Section
+                    if (state.trending.isNotEmpty()) {
+                        item(key = "trending_section") {
+                            WebsiteMovieRowSection(
+                                title = "Trending Now",
+                                movies = state.trending,
+                                onSeeAll = { navigateToBrowseTab(0) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 9. Currently Airing / Simulcast Section
+                    if (state.running.isNotEmpty()) {
+                        item(key = "running_section") {
+                            WebsiteMovieRowSection(
+                                title = "Currently Airing",
+                                movies = state.running,
+                                onSeeAll = { navigateToBrowseTab(4) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 10. Latest Additions Section (`page.tsx` line 231)
+                    if (state.latestAdditions.isNotEmpty()) {
+                        item(key = "latest_additions_section") {
+                            WebsiteMovieRowSection(
+                                title = "Latest Additions",
+                                movies = state.latestAdditions,
+                                onSeeAll = { navigateToBrowseTab(0) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 11. Latest Movies Section (`page.tsx` line 248)
+                    if (state.recentMovies.isNotEmpty()) {
+                        item(key = "latest_movies_section") {
+                            WebsiteMovieRowSection(
+                                title = "Latest Movies",
+                                movies = state.recentMovies,
+                                onSeeAll = { navigateToBrowseTab(1) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 12. Latest Series Section (`page.tsx` line 264)
+                    if (state.recentSeries.isNotEmpty()) {
+                        item(key = "latest_series_section") {
+                            WebsiteMovieRowSection(
+                                title = "Latest Series",
+                                movies = state.recentSeries,
+                                onSeeAll = { navigateToBrowseTab(3) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
+                    }
+
+                    // 13. Latest Anime Section (`page.tsx` line 280)
+                    if (state.recentAnime.isNotEmpty()) {
+                        item(key = "latest_anime_section") {
+                            WebsiteMovieRowSection(
+                                title = "Latest Anime",
+                                movies = state.recentAnime,
+                                onSeeAll = { navigateToBrowseTab(2) },
+                                onMovieClick = { movie ->
+                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
-
-        if (state.isLoading) {
-            HomeShimmerLoading()
-        } else if (state.error != null) {
-            com.nexiplay.app.ui.components.ErrorView(
-                message = state.error!!,
-                onRetry = { vm.loadHome() }
-            )
-        } else {
-            // ── Inline App Notices (from GlobalNoticeViewModel) ──
-            val noticeVm: GlobalNoticeViewModel = viewModel()
-            val allNotices by noticeVm.notices.collectAsState()
-            val dismissedIds by noticeVm.dismissedNoticeIds.collectAsState()
-            val inlineNotices = allNotices.filter { 
-                it.id !in dismissedIds && 
-                it.type == "inline" && 
-                (it.pages == "all" || it.pages == "home")
-            }
-            if (inlineNotices.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    inlineNotices.forEach { notice ->
-                        InlineNotice(notice = notice, onDismiss = { noticeVm.dismissNotice(notice.id) })
-                    }
-                }
-            }
-
-            // ── Auto-Sliding Hero Banner (like web) ──
-            if (state.trending.isNotEmpty()) {
-                HeroSlider(
-                    movies = state.trending,
-                    onMovieClick = { movie ->
-                        activity?.let {
-                            AdManager.showInterstitialAd(it) {
-                                navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
-                            }
-                        } ?: navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
-                    }
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // ── Web-Style Latest Updates ──
-            if (state.updates.isNotEmpty()) {
-                LatestUpdatesSection(
-                    updates = state.updates,
-                    navController = navController,
-                )
-            } else if (state.running.isNotEmpty()) {
-                // Fallback to running movies if updates is empty
-                RunningSection(
-                    items = state.running,
-                    navController = navController,
-                )
-            }
-
-            // ── Upcoming Section (like web) ──
-            if (state.upcoming.isNotEmpty()) {
-                UpcomingSection(
-                    items = state.upcoming,
-                    navController = navController,
-                )
-            }
-
-            // ── Trending ──
-            if (state.trending.size > 1) {
-                ContentRow("🔥 Trending Now", state.trending, navController)
-            }
-
-            // ── Recent Movies ──
-            if (state.recentMovies.isNotEmpty()) {
-                ContentRow("🎬 Recent Movies", state.recentMovies, navController)
-            }
-
-            // ── Recent Anime ──
-            if (state.recentAnime.isNotEmpty()) {
-                ContentRow("⚡ Recent Anime", state.recentAnime, navController)
-            }
-
-            // ── Recent Series ──
-            if (state.recentSeries.isNotEmpty()) {
-                ContentRow("📺 Recent Series", state.recentSeries, navController)
-            }
-
-            Spacer(Modifier.height(24.dp))
-        }
-    }
     }
 }
 
-// ═══════════════════════════════════════════════════
-// Auto-Sliding Hero Banner — Like the Web HeroSlider
-// ═══════════════════════════════════════════════════
+/**
+ * Matches `src/components/Header.tsx` 1:1:
+ * - Left: Emblem with radial `#9273F5` glow + `NEXIPLAY` (`PLAY` in `#9273F5`)
+ * - Right: Telegram pill (`#229ED9/15`), Search circle, Bell circle, Hamburger Menu circle
+ */
 @Composable
-private fun HeroSlider(movies: List<Movie>, onMovieClick: (Movie) -> Unit) {
-    val pagerState = rememberPagerState(pageCount = { movies.size })
+private fun WebsiteTopHeader(
+    onSearchClick: () -> Unit,
+    onNotificationsClick: () -> Unit,
+    onTelegramClick: () -> Unit,
+    onMenuClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(themeBg().copy(alpha = 0.94f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp)
+                .padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Brand Logo + NEXIPLAY wordmark (`Header.tsx` lines 65-77)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        NexiRed.copy(alpha = 0.35f),
+                                        Color.Transparent
+                                    )
+                                ),
+                                CircleShape
+                            )
+                    )
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_emblem_clean),
+                        contentDescription = "Nexiplay",
+                        modifier = Modifier.size(34.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
 
-    // Auto-slide every 5 seconds
-    LaunchedEffect(pagerState) {
-        while (true) {
-            delay(5000)
-            val next = (pagerState.currentPage + 1) % movies.size
-            pagerState.animateScrollToPage(next, animationSpec = tween(800))
+                Text(
+                    text = buildAnnotatedString {
+                        withStyle(SpanStyle(color = themeTextPrimary(), fontWeight = FontWeight.ExtraBold)) {
+                            append("NEXI")
+                        }
+                        withStyle(SpanStyle(color = NexiRed, fontWeight = FontWeight.ExtraBold)) {
+                            append("PLAY")
+                        }
+                    },
+                    fontFamily = InterFont,
+                    fontSize = 18.sp,
+                    letterSpacing = (-0.5).sp
+                )
+            }
+
+            // Right Action Controls (`Header.tsx` lines 105-168)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                // Website Telegram Pill (`bg-[#229ED9]/15 border-[#229ED9]/30 text-[#229ED9]`)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xFF229ED9).copy(alpha = 0.15f))
+                        .border(1.dp, Color(0xFF229ED9).copy(alpha = 0.32f), RoundedCornerShape(50))
+                        .bounceClick(onClick = onTelegramClick)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = NexiSvgIcons.Telegram,
+                            contentDescription = "Telegram",
+                            tint = Color(0xFF229ED9),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "Telegram",
+                            color = Color(0xFF229ED9),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = InterFont
+                        )
+                    }
+                }
+
+                // Search Button
+                HeaderCircleIconButton(
+                    icon = NexiSvgIcons.Search,
+                    contentDescription = "Search",
+                    onClick = onSearchClick
+                )
+
+                // Notification Bell Button with Mint Dot
+                Box {
+                    HeaderCircleIconButton(
+                        icon = NexiSvgIcons.Bell,
+                        contentDescription = "Notifications",
+                        onClick = onNotificationsClick
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-2).dp, y = 2.dp)
+                            .size(7.dp)
+                            .background(NexiRed, CircleShape)
+                            .border(1.dp, themeBg(), CircleShape)
+                    )
+                }
+
+                // Hamburger Menu Button (Opens Full Website Navigation Drawer)
+                HeaderCircleIconButton(
+                    icon = NexiSvgIcons.Menu,
+                    contentDescription = "Menu",
+                    onClick = onMenuClick
+                )
+            }
+        }
+
+        // Subtle bottom hairline border (`border-b border-white/[0.06]`)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(themeBorder())
+        )
+    }
+}
+
+@Composable
+private fun HeaderCircleIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(themeCard())
+            .border(1.dp, themeBorder(), CircleShape)
+            .bounceClick(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = themeTextSecondary(),
+            modifier = Modifier.size(15.dp)
+        )
+    }
+}
+
+/**
+ * Matches `src/components/HeroSlider.tsx` 1:1:
+ * - Full-bleed edge-to-edge backdrop with smooth bottom & left `#0D0B12` gradients
+ * - Left & Right circular SVG chevron buttons (`NexiSvgIcons.ChevronLeft` / `ChevronRight`)
+ * - Type badge (`#9273F5/20`), `18+` badge (`#FFB878/20`), Release Year
+ * - Bold title + 2-line synopsis
+ * - `Watch Now` `.np-btn-primary` clay button + `Details` `.np-btn-ghost` button
+ * - Bottom pagination pills (`28.dp` active `#9273F5` pill)
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WebsiteHeroSlider(
+    movies: List<Movie>,
+    onMovieClick: (Movie) -> Unit
+) {
+    val pagerState = rememberPagerState(pageCount = { movies.size })
+    val coroutineScope = rememberCoroutineScope()
+
+    // Auto-advance every 6000ms matching `HeroSlider.tsx`
+    LaunchedEffect(movies.size) {
+        if (movies.size > 1) {
+            while (true) {
+                delay(6000)
+                if (!pagerState.isScrollInProgress) {
+                    val next = (pagerState.currentPage + 1) % movies.size
+                    pagerState.animateScrollToPage(next)
+                }
+            }
         }
     }
 
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(420.dp)
+            .background(themeBg())
+    ) {
         HorizontalPager(
             state = pagerState,
-            key = { movies[it].id },
-            modifier = Modifier.fillMaxWidth().height(420.dp),
+            modifier = Modifier.fillMaxSize()
         ) { page ->
             val movie = movies[page]
+            val bannerUrl = movie.bannerUrlMobile?.takeIf { it.isNotBlank() }
+                ?: movie.bannerUrlDesktop?.takeIf { it.isNotBlank() }
+                ?: movie.posterUrl
+
+            val heroRequest = rememberPosterImageRequest(bannerUrl, 780, 560)
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .bounceClick { onMovieClick(movie) }
+                    .clickable { onMovieClick(movie) }
             ) {
-                // Parallax Background image
-                val context = LocalContext.current
-                val bannerUrl = movie.bannerUrlMobile ?: movie.bannerUrlDesktop ?: movie.posterUrl
-                val bannerRequest = remember(bannerUrl) {
-                    ImageRequest.Builder(context)
-                        .data(bannerUrl)
-                        .size(Size(720, 1080))
-                        .precision(Precision.INEXACT)
-                        .build()
+                if (heroRequest != null) {
+                    AsyncImage(
+                        model = heroRequest,
+                        contentDescription = movie.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
-                val pageOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
-                
-                AsyncImage(
-                    model = bannerRequest,
-                    contentDescription = movie.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().graphicsLayer {
-                        translationX = pageOffset * size.width * 0.3f
-                    },
-                )
 
-                // Dark gradient from bottom
-                val bgGradientEnd = themeBg()
+                // Bottom-to-top gradient
                 Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color.Transparent,
-                                bgGradientEnd.copy(alpha = 0.3f),
-                                bgGradientEnd.copy(alpha = 0.85f),
-                                bgGradientEnd,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0.0f to themeBg().copy(alpha = 0.25f),
+                                    0.45f to themeBg().copy(alpha = 0.45f),
+                                    0.82f to themeBg().copy(alpha = 0.92f),
+                                    1.0f to themeBg()
+                                )
                             )
                         )
-                    )
                 )
 
-                // Radial gradient from left (like web)
+                // Left-to-right gradient
                 Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.6f),
-                                Color.Transparent,
-                            ),
-                            endX = 600f,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                colorStops = arrayOf(
+                                    0.0f to themeBg().copy(alpha = 0.82f),
+                                    0.55f to themeBg().copy(alpha = 0.28f),
+                                    1.0f to Color.Transparent
+                                )
+                            )
                         )
-                    )
                 )
 
-                // Content overlay
+                // Hero Content Overlay (`HeroSlider.tsx` lines 77-121)
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(horizontal = 20.dp, vertical = 40.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp)
+                        .padding(bottom = 32.dp)
                 ) {
-                    // Type badge + Year
+                    // Metadata Badges Row
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Box(
-                            Modifier
-                                .background(NexiRed, RoundedCornerShape(20.dp))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                            modifier = Modifier
+                                .background(NexiRed.copy(alpha = 0.22f), RoundedCornerShape(6.dp))
+                                .border(1.dp, NexiRed.copy(alpha = 0.42f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 9.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                movie.type.uppercase(),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Black,
-                                color = themeTextPrimary(),
-                                letterSpacing = 1.sp,
+                                text = movie.type.ifBlank { "MOVIE" }.uppercase(),
+                                color = NexiRedLight,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp,
+                                fontFamily = InterFont
                             )
                         }
+
                         if (movie.isAdult == true) {
                             Box(
-                                Modifier
-                                    .background(
-                                        Brush.horizontalGradient(listOf(NexiRedDark, NexiRed)),
-                                        RoundedCornerShape(20.dp)
-                                    )
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                modifier = Modifier
+                                    .background(CoinGold.copy(alpha = 0.20f), RoundedCornerShape(6.dp))
+                                    .border(1.dp, CoinGold.copy(alpha = 0.42f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
-                                Text("🔞 18+", fontSize = 10.sp, fontWeight = FontWeight.Black, color = themeTextPrimary())
+                                Text(
+                                    text = "18+",
+                                    color = CoinGold,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = InterFont
+                                )
                             }
                         }
+
                         if (movie.releaseYear != null) {
-                            Text("${movie.releaseYear}", fontSize = 13.sp, color = themeTextSecondary(), fontWeight = FontWeight.Medium)
+                            Text(
+                                text = movie.releaseYear.toString(),
+                                color = TextGray,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFamily = InterFont
+                            )
                         }
                     }
 
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Title
                     Text(
                         text = movie.title,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Black,
-                        color = themeTextPrimary(),
+                        color = TextWhite,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = InterFont,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        lineHeight = 34.sp,
+                        lineHeight = 31.sp
                     )
 
-                    // Description
                     if (!movie.description.isNullOrBlank()) {
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = movie.description,
-                            fontSize = 13.sp,
-                            color = themeTextSecondary(),
+                            color = TextGray,
+                            fontSize = 12.5.sp,
+                            fontFamily = InterFont,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            lineHeight = 18.sp,
+                            lineHeight = 18.sp
                         )
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                    // Action buttons
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = { onMovieClick(movie) },
-                            colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(44.dp),
+                    // Action Buttons (`Watch Now` + `Details`)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // `.np-btn-primary` Watch Now Button
+                        Box(
+                            modifier = Modifier
+                                .shadow(
+                                    elevation = 12.dp,
+                                    shape = RoundedCornerShape(12.dp),
+                                    ambientColor = NexiRed,
+                                    spotColor = NexiRed
+                                )
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(NexiRed, NexiRedDark)
+                                    )
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                                .bounceClick { onMovieClick(movie) }
+                                .padding(horizontal = 18.dp, vertical = 11.dp)
                         ) {
-                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Watch Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                Icon(
+                                    imageVector = NexiSvgIcons.PlayFilled,
+                                    contentDescription = "Watch Now",
+                                    tint = TextWhite,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "Watch Now",
+                                    color = TextWhite,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = InterFont
+                                )
+                            }
                         }
-                        OutlinedButton(
-                            onClick = { onMovieClick(movie) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = themeTextPrimary()),
-                            modifier = Modifier.height(44.dp),
+
+                        // `.np-btn-ghost` Details Button
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF17141F).copy(alpha = 0.85f))
+                                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .bounceClick { onMovieClick(movie) }
+                                .padding(horizontal = 16.dp, vertical = 11.dp)
                         ) {
-                            Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Details", fontSize = 14.sp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                Icon(
+                                    imageVector = NexiSvgIcons.InfoOutline,
+                                    contentDescription = "Details",
+                                    tint = TextWhite,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "Details",
+                                    color = TextWhite,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = InterFont
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── Page Indicator (dots like web) ──
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            repeat(movies.size) { idx ->
-                val isActive = pagerState.currentPage == idx
-                Box(
-                    modifier = Modifier
-                        .height(8.dp)
-                        .width(if (isActive) 24.dp else 8.dp)
-                        .clip(CircleShape)
-                        .background(if (isActive) NexiRed else themeTextPrimary().copy(alpha = 0.4f))
-                        .animateContentSize(animationSpec = tween(300))
-                )
-            }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════
-// Running / Latest Updates Section (like web)
-// ═══════════════════════════════════════════════
-@Composable
-private fun RunningSection(items: List<Movie>, navController: NavController) {
-    val activity = LocalContext.current as? Activity
-    Column(modifier = Modifier.padding(bottom = 20.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(8.dp).clip(CircleShape).background(SuccessGreen)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Latest Updates", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
-            }
-            Text("Running", fontSize = 12.sp, color = SuccessGreen, fontWeight = FontWeight.Bold)
-        }
-
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items, key = { it.id }) { movie ->
-                RunningCard(
-                    movie = movie,
-                    onClick = {
-                        val act = activity
-                        if (act != null) {
-                            AdManager.showInterstitialAd(act) {
-                                navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
-                            }
-                        } else {
-                            navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RunningCard(movie: Movie, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .width(150.dp)
-            .clickable(onClick = onClick)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(210.dp)
-                .clip(RoundedCornerShape(12.dp))
-        ) {
-            val context = LocalContext.current
-            val posterRequest = remember(movie.posterUrl) {
-                ImageRequest.Builder(context)
-                    .data(movie.posterUrl)
-                    .size(Size(280, 410))
-                    .precision(Precision.INEXACT)
-                    .build()
-            }
-            AsyncImage(
-                model = posterRequest,
-                contentDescription = movie.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            // Bottom gradient
+        // Left & Right Circular Navigation Arrows (`HeroSlider.tsx` lines 125-152)
+        if (movies.size > 1) {
             Box(
-                Modifier.fillMaxWidth().height(80.dp).align(Alignment.BottomCenter)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
-            )
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 10.dp)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF17141F).copy(alpha = 0.65f))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                    .bounceClick {
+                        coroutineScope.launch {
+                            val prev = if (pagerState.currentPage == 0) movies.size - 1 else pagerState.currentPage - 1
+                            pagerState.animateScrollToPage(prev)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = NexiSvgIcons.ChevronLeft,
+                    contentDescription = "Previous Slide",
+                    tint = TextWhite,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
 
-            // Green "RUNNING" indicator at top
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 10.dp)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF17141F).copy(alpha = 0.65f))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                    .bounceClick {
+                        coroutineScope.launch {
+                            val next = (pagerState.currentPage + 1) % movies.size
+                            pagerState.animateScrollToPage(next)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = NexiSvgIcons.ChevronRight,
+                    contentDescription = "Next Slide",
+                    tint = TextWhite,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            // Bottom Pagination Indicator Dots (`HeroSlider.tsx` lines 155-169)
             Row(
                 modifier = Modifier
-                    .padding(6.dp)
-                    .align(Alignment.TopStart)
-                    .background(SuccessGreen.copy(alpha = 0.9f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(5.dp).clip(CircleShape).background(themeTextPrimary()))
-                Spacer(Modifier.width(4.dp))
-                Text("RUNNING", fontSize = 8.sp, fontWeight = FontWeight.Black, color = themeTextPrimary())
-            }
-
-            // Type badge
-            Box(
-                Modifier.padding(6.dp).align(Alignment.TopEnd)
-                    .background(NexiRed, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text(movie.type.uppercase(), fontSize = 8.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
-            }
-
-            // Episode info at bottom
-            Column(
-                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
-            ) {
-                if (movie.lastEpisode != null) {
-                    Text("EP ${movie.lastEpisode}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CoinGold)
-                }
-                if (movie.runningNotice != null) {
-                    Text(movie.runningNotice, fontSize = 10.sp, color = themeTextSecondary(), maxLines = 1)
-                } else if (movie.nextEpisodeDate != null) {
-                    Text("Next: ${movie.nextEpisodeDate}", fontSize = 10.sp, color = themeTextSecondary())
-                }
-            }
-        }
-
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            text = movie.title,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = themeTextPrimary(),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            lineHeight = 16.sp,
-        )
-    }
-}
-
-// ═══════════════════════════════════════
-// Content Row (horizontal scroll)
-// ═══════════════════════════════════════
-@Composable
-private fun ContentRow(title: String, items: List<Movie>, navController: NavController) {
-    val activity = LocalContext.current as? Activity
-    Column(modifier = Modifier.padding(bottom = 20.dp)) {
-        Text(
-            text = title,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = themeTextPrimary(),
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items, key = { it.id }) { movie ->
-                MovieCard(
-                    movie = movie,
-                    onClick = {
-                        val act = activity
-                        if (act != null) {
-                            AdManager.showInterstitialAd(act) {
-                                navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                repeat(movies.size) { index ->
+                    val isSelected = pagerState.currentPage == index
+                    Box(
+                        modifier = Modifier
+                            .height(6.dp)
+                            .width(if (isSelected) 26.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) NexiRed
+                                else Color.White.copy(alpha = 0.22f)
+                            )
+                            .clickable {
+                                coroutineScope.launch {
+                                    pagerState.animateScrollToPage(index)
+                                }
                             }
-                        } else {
-                            navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun HomeShimmerLoading() {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        // Hero Banner Shimmer
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(420.dp)
-                .shimmerEffect()
-        )
-        Spacer(Modifier.height(20.dp))
-        
-        // Rows Shimmer
-        repeat(3) {
-            Column(modifier = Modifier.padding(bottom = 24.dp)) {
-                // Title Shimmer
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .width(150.dp)
-                        .height(24.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .shimmerEffect()
-                )
-                
-                // Cards Shimmer
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(4) {
-                        Column(modifier = Modifier.width(130.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(190.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .shimmerEffect()
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(0.8f)
-                                    .height(14.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .shimmerEffect()
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(0.5f)
-                                    .height(14.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .shimmerEffect()
-                            )
-                        }
-                    }
+                    )
                 }
             }
         }
     }
 }
 
-// ═══════════════════════════════════════════════════
-// Category & Type Navigation Pills (like web)
-// ═══════════════════════════════════════════════════
+/**
+ * Matches `src/app/(site)/page.tsx` line 183 Neumorphic Inset Search Bar
+ */
 @Composable
-private fun CategoryFilterPills(
-    categories: List<com.nexiplay.app.data.model.Category>,
-    onCategoryClick: (String) -> Unit,
-    onTypeClick: (String) -> Unit
-) {
-    val types = listOf(
-        "All" to "",
-        "Movies" to "movies",
-        "Series" to "series",
-        "Anime" to "anime",
-        "Novels" to "novels"
-    )
-
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun WebsiteInsetSearchBar(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 12.dp, bottom = 10.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(themeCard())
+            .border(1.dp, themeBorder(), RoundedCornerShape(14.dp))
+            .bounceClick(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp)
     ) {
-        items(types, key = { it.second }) { (label, key) ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(11.dp)
+            ) {
+                Icon(
+                    imageVector = NexiSvgIcons.Search,
+                    contentDescription = "Search",
+                    tint = themeTextSecondary(),
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "Search movies, anime, or series...",
+                    color = themeTextSecondary(),
+                    fontSize = 13.sp,
+                    fontFamily = InterFont
+                )
+            }
+
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(if (key.isEmpty()) NexiRed else themeCard())
-                    .clickable { onTypeClick(key) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(NexiRed.copy(alpha = if (isDark) 0.14f else 0.1f))
+                    .border(0.5.dp, NexiRed.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
             ) {
                 Text(
-                    text = label,
-                    fontSize = 12.sp,
+                    text = "SEARCH",
+                    color = if (isDark) NexiRedLight else NexiRed,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
-                    color = themeTextPrimary()
+                    fontFamily = InterFont
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Matches `TypeTabs` in `src/app/(site)/page.tsx` lines 69-105:
+ * Segmented glass container (`bg-[#17141F]/70 border-white/[0.07] rounded-2xl p-1.5`)
+ */
+@Composable
+private fun WebsiteTypeTabsBar(
+    onSelectBrowseTab: (Int) -> Unit,
+    onNavigate: (String) -> Unit
+) {
+    val tabs = remember {
+        listOf(
+            WebsiteTypeTab("All", NexiSvgIcons.Grid) {},
+            WebsiteTypeTab("Movies", NexiSvgIcons.Movies) { onSelectBrowseTab(1) },
+            WebsiteTypeTab("Series", NexiSvgIcons.Series) { onSelectBrowseTab(3) },
+            WebsiteTypeTab("Anime", NexiSvgIcons.Anime) { onSelectBrowseTab(2) },
+            WebsiteTypeTab("Novels", NexiSvgIcons.Novels) { onNavigate(Screen.Novels.route) },
+            WebsiteTypeTab("Live TV", NexiSvgIcons.LiveTv) { onNavigate(Screen.LiveTv.route) },
+            WebsiteTypeTab("Games", NexiSvgIcons.Gamepad) { onNavigate(Screen.Games.route) }
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isDark) Color(0xFF17141F).copy(alpha = 0.78f) else Color.White)
+            .border(1.dp, themeBorder(), RoundedCornerShape(16.dp))
+            .padding(6.dp)
+    ) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            items(tabs.size) { index ->
+                val tab = tabs[index]
+                val isSelected = index == 0
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(11.dp))
+                        .then(
+                            if (isSelected) {
+                                Modifier
+                                    .background(
+                                        Brush.linearGradient(
+                                            colors = listOf(NexiRed, NexiRedDark)
+                                        )
+                                    )
+                                    .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(11.dp))
+                            } else {
+                                Modifier.background(Color.Transparent)
+                            }
+                        )
+                        .bounceClick(onClick = tab.onClick)
+                        .padding(horizontal = 13.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            tint = if (isSelected) TextWhite else themeTextSecondary(),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = tab.label,
+                            color = if (isSelected) TextWhite else themeTextSecondary(),
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                            fontFamily = InterFont
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Matches `src/components/CategoryMenu.tsx` 1:1
+ */
+@Composable
+private fun WebsiteCategoryMenuRow(
+    categories: List<Category>,
+    onCategoryClick: (String?) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item(key = "cat_all") {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(NexiRed, NexiRedDark)
+                        )
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+                    .bounceClick { onCategoryClick(null) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "All",
+                    color = TextWhite,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = InterFont
                 )
             }
         }
@@ -671,77 +1031,354 @@ private fun CategoryFilterPills(
         items(categories, key = { it.id }) { cat ->
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(themeCard())
-                    .clickable { onCategoryClick(cat.slug) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .border(1.dp, themeBorder(), RoundedCornerShape(10.dp))
+                    .bounceClick { onCategoryClick(cat.slug) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
             ) {
                 Text(
                     text = cat.name,
-                    fontSize = 12.sp,
+                    color = themeTextSecondary(),
+                    fontSize = 11.5.sp,
                     fontWeight = FontWeight.Medium,
-                    color = themeTextSecondary()
+                    fontFamily = InterFont
                 )
             }
         }
     }
 }
 
-// ═══════════════════════════════════════════════════
-// Web-Matching Latest Updates Section
-// ═══════════════════════════════════════════════════
+/**
+ * Unified Premium Entertainment Hub:
+ * Replaces old vertically-stacked banners with a single, ultra-premium 3-tile deck:
+ * 1. Live TV (Sports, News, Bangladesh & Global Channels) - Mint
+ * 2. Vibe Check (AI-powered Mood Recommendations) - Royal Violet
+ * 3. Arcade Games (1,000+ Instant Free HTML5 Games) - Arcade Blue
+ */
 @Composable
-private fun LatestUpdatesSection(
-    updates: List<UpdateItem>,
-    navController: NavController
+private fun WebsiteFeatureBannersSection(
+    onLiveTvClick: () -> Unit,
+    onVibeCheckClick: () -> Unit,
+    onGamesClick: () -> Unit
 ) {
-    val activity = LocalContext.current as? Activity
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .padding(top = 12.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        WebsiteFeatureHubCard(
+            title = "Live TV",
+            subtitle = "Sports & News, streaming now",
+            badge = "LIVE",
+            ctaText = "Watch now",
+            icon = NexiSvgIcons.LiveTv,
+            baseBgTop = Color(0xFF0C1819),
+            baseBgBottom = Color(0xFF0A0E14),
+            glowColor = Color(0xFF14B8A6),
+            iconBoxTop = Color(0xFF2DD4BF),
+            iconBoxBottom = Color(0xFF0D9488),
+            iconTint = Color(0xFF04221C),
+            badgeBg = Color(0xFF3B1D24).copy(alpha = 0.78f),
+            badgeBorder = Color(0xFFF87171).copy(alpha = 0.45f),
+            badgeTextColor = Color(0xFFFEE2E2),
+            ctaBg = Color(0xFF1DE9B6),
+            ctaTextColor = Color(0xFF04221C),
+            onClick = onLiveTvClick,
+            showLiveIndicator = true
+        )
 
-    Column(modifier = Modifier.padding(bottom = 20.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Pulsing Live Indicator
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(SuccessGreen)
+        WebsiteFeatureHubCard(
+            title = "Vibe Check",
+            subtitle = "AI Mood Match, picks for how you feel",
+            badge = "AI",
+            ctaText = "Try it",
+            icon = NexiSvgIcons.VibeSparkles,
+            baseBgTop = Color(0xFF171126),
+            baseBgBottom = Color(0xFF0B0A13),
+            glowColor = Color(0xFFA855F7),
+            iconBoxTop = Color(0xFFB366FF),
+            iconBoxBottom = Color(0xFF8B5CF6),
+            iconTint = Color(0xFF190730),
+            badgeBg = Color(0xFF2A1C42).copy(alpha = 0.80f),
+            badgeBorder = Color(0xFFC084FC).copy(alpha = 0.42f),
+            badgeTextColor = Color(0xFFF3E8FF),
+            ctaBg = Color(0xFFC4B5FD),
+            ctaTextColor = Color(0xFF1D0B36),
+            onClick = onVibeCheckClick
+        )
+
+        WebsiteFeatureHubCard(
+            title = "Arcade",
+            subtitle = "1,000+ Games, instant play",
+            badge = "PLAY",
+            ctaText = "Play now",
+            icon = NexiSvgIcons.Gamepad,
+            baseBgTop = Color(0xFF0F192B),
+            baseBgBottom = Color(0xFF090D16),
+            glowColor = Color(0xFF3B82F6),
+            iconBoxTop = Color(0xFF60A5FA),
+            iconBoxBottom = Color(0xFF3B82F6),
+            iconTint = Color(0xFF071936),
+            badgeBg = Color(0xFF192845).copy(alpha = 0.80f),
+            badgeBorder = Color(0xFF60A5FA).copy(alpha = 0.42f),
+            badgeTextColor = Color(0xFFDBEAFE),
+            ctaBg = Color(0xFF93C5FD),
+            ctaTextColor = Color(0xFF081D3A),
+            onClick = onGamesClick
+        )
+    }
+}
+
+@Composable
+private fun RowScope.WebsiteFeatureHubCard(
+    title: String,
+    subtitle: String,
+    badge: String,
+    ctaText: String,
+    icon: ImageVector,
+    baseBgTop: Color,
+    baseBgBottom: Color,
+    glowColor: Color,
+    iconBoxTop: Color,
+    iconBoxBottom: Color,
+    iconTint: Color,
+    badgeBg: Color,
+    badgeBorder: Color,
+    badgeTextColor: Color,
+    ctaBg: Color,
+    ctaTextColor: Color,
+    onClick: () -> Unit,
+    showLiveIndicator: Boolean = false
+) {
+    val shape = RoundedCornerShape(18.dp)
+
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(164.dp)
+            .shadow(
+                elevation = 10.dp,
+                shape = shape,
+                ambientColor = glowColor.copy(alpha = 0.35f),
+                spotColor = glowColor.copy(alpha = 0.45f)
+            )
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(baseBgTop, baseBgBottom)
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("Latest Updates", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
+            )
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = 0.32f),
+                        glowColor.copy(alpha = 0.10f),
+                        Color.Transparent
+                    ),
+                    center = Offset(240f, 35f),
+                    radius = 230f
+                )
+            )
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = 0.22f),
+                        Color.Transparent
+                    ),
+                    center = Offset(45f, 55f),
+                    radius = 160f
+                )
+            )
+            .border(
+                1.dp,
+                Brush.verticalGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = 0.55f),
+                        glowColor.copy(alpha = 0.18f),
+                        glowColor.copy(alpha = 0.38f)
+                    )
+                ),
+                shape
+            )
+            .bounceClick(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 11.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top Row: Solid Neon Squircle Icon + Outlined Pill Badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .shadow(
+                            elevation = 8.dp,
+                            shape = RoundedCornerShape(11.dp),
+                            ambientColor = glowColor,
+                            spotColor = glowColor
+                        )
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(iconBoxTop, iconBoxBottom)
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = iconTint,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(badgeBg)
+                        .border(1.dp, badgeBorder, RoundedCornerShape(50))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (showLiveIndicator) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .background(Color(0xFFEF4444), CircleShape)
+                        )
+                    }
+                    Text(
+                        text = badge,
+                        color = badgeTextColor,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = InterFont,
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
-            Text("LIVE", fontSize = 12.sp, color = SuccessGreen, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+
+            // Middle Column: Bold Title + 2-Line Description
+            Column(
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = InterFont,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    letterSpacing = (-0.2).sp
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = subtitle,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 9.5.sp,
+                    lineHeight = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = InterFont,
+                    maxLines = 2,
+                    minLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // Bottom Solid Pill CTA Button ("Watch now ->", "Try it ->", "Play now ->")
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(ctaBg)
+                    .padding(horizontal = 10.dp, vertical = 5.5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = "$ctaText \u2192",
+                    color = ctaTextColor,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = InterFont,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Matches `.section-title` in `src/app/globals.css` + `View All` button in `src/app/(site)/page.tsx`:
+ * - Left: `4.dp x 20.dp` vertical `#9273F5` pill bar + ExtraBold title
+ * - Right: Optional `View All` `.np-btn-ghost` pill with `NexiSvgIcons.ChevronRight`
+ */
+@Composable
+private fun WebsiteSectionHeader(
+    title: String,
+    onSeeAll: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(NexiRed)
+            )
+            Text(
+                text = title,
+                color = themeTextPrimary(),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = InterFont,
+                letterSpacing = (-0.3).sp
+            )
         }
 
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(updates, key = { it.id }) { item ->
-                LatestUpdateCard(
-                    item = item,
-                    onClick = {
-                        val rawSlug = item.slug.removePrefix("/")
-                        val parts = rawSlug.split("/")
-                        val type = if (parts.size >= 2) parts[0] else (item.contentType ?: "movie")
-                        val cleanSlug = if (parts.size >= 2) parts[1] else rawSlug
-                        val targetRoute = Screen.ContentDetail.createRoute(type, cleanSlug)
-
-                        val act = activity
-                        if (act != null) {
-                            AdManager.showInterstitialAd(act) {
-                                navController.navigate(targetRoute)
-                            }
-                        } else {
-                            navController.navigate(targetRoute)
-                        }
-                    }
+        if (onSeeAll != null) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(themeCard())
+                    .border(1.dp, themeBorder(), RoundedCornerShape(9.dp))
+                    .bounceClick(onClick = onSeeAll)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "View All",
+                    color = if (isDark) NexiRedLight else NexiRed,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = InterFont
+                )
+                Icon(
+                    imageVector = NexiSvgIcons.ChevronRight,
+                    contentDescription = "View All",
+                    tint = if (isDark) NexiRedLight else NexiRed,
+                    modifier = Modifier.size(12.dp)
                 )
             }
         }
@@ -749,252 +1386,662 @@ private fun LatestUpdatesSection(
 }
 
 @Composable
-private fun LatestUpdateCard(item: UpdateItem, onClick: () -> Unit) {
-    val badgeText = when (item.updateType) {
-        "episode" -> {
-            val season = item.seasonNumber
-            val ep = item.episodeNumber
-            if (season != null && ep != null) "S$season EP $ep ADDED"
-            else if (ep != null) "EP $ep ADDED"
-            else "NEW EPISODE"
+private fun WebsiteMovieRowSection(
+    title: String,
+    movies: List<Movie>,
+    onSeeAll: () -> Unit,
+    onMovieClick: (Movie) -> Unit
+) {
+    Spacer(modifier = Modifier.height(22.dp))
+    WebsiteSectionHeader(title = title, onSeeAll = onSeeAll)
+    Spacer(modifier = Modifier.height(10.dp))
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(
+            items = movies,
+            key = { "${title}_${it.id}" },
+            contentType = { "movie_card" }
+        ) { movie ->
+            MovieCard(
+                movie = movie,
+                onClick = { onMovieClick(movie) }
+            )
         }
-        "season" -> {
-            val season = item.seasonNumber
-            if (season != null) "SEASON $season ADDED"
-            else "NEW SEASON"
+    }
+}
+
+/**
+ * Matches `src/components/LatestUpdates.tsx` 1:1:
+ * - Section Header: Vertical `#9273F5` bar + "Latest Updates" + "LIVE" badge + Left/Right circular scroll buttons
+ * - Vertical `2:3` poster cards (`142.dp` wide) with top-left "NEW" badge, top-right contentType badge,
+ *   bottom-left update status badge (`S1 EP 5 ADDED` / `EP 5 ADDED` / `SEASON 2 ADDED` / `NEW RELEASE`),
+ *   and 2-line title below poster.
+ */
+@Composable
+private fun WebsiteLatestUpdatesSection(
+    updates: List<UpdateItem>,
+    onUpdateClick: (UpdateItem) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    Spacer(modifier = Modifier.height(18.dp))
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(3.5.dp)
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(NexiRed)
+            )
+            Text(
+                text = "Latest Updates",
+                color = TextWhite,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = InterFont
+            )
+            Box(
+                modifier = Modifier
+                    .background(NexiRed.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+                    .border(1.dp, NexiRed.copy(alpha = 0.32f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "LIVE",
+                    color = NexiRedLight,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = InterFont,
+                    letterSpacing = 0.6.sp
+                )
+            }
+        }
+
+        // Scroll Left / Right circular buttons from `LatestUpdates.tsx`
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), CircleShape)
+                    .clickable {
+                        scope.launch {
+                            val target = (listState.firstVisibleItemIndex - 2).coerceAtLeast(0)
+                            listState.animateScrollToItem(target)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = NexiSvgIcons.ChevronLeft,
+                    contentDescription = "Scroll Left",
+                    tint = TextGray,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), CircleShape)
+                    .clickable {
+                        scope.launch {
+                            val target = (listState.firstVisibleItemIndex + 2)
+                                .coerceAtMost((updates.size - 1).coerceAtLeast(0))
+                            listState.animateScrollToItem(target)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = NexiSvgIcons.ChevronRight,
+                    contentDescription = "Scroll Right",
+                    tint = TextGray,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    LazyRow(
+        state = listState,
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(
+            items = updates,
+            key = { it.id },
+            contentType = { "update_card" }
+        ) { update ->
+            WebsiteUpdateCard(
+                update = update,
+                onClick = { onUpdateClick(update) }
+            )
+        }
+    }
+}
+
+private fun getWebsiteUpdateBadgeText(item: UpdateItem): String {
+    val ut = (item.updateType ?: "").lowercase()
+    return when {
+        ut == "new_episode" && item.episodeNumber != null -> {
+            val s = if (item.seasonNumber != null) "S${item.seasonNumber} " else ""
+            "${s}EP ${item.episodeNumber} ADDED"
+        }
+        ut == "new_season" && item.seasonNumber != null -> {
+            "SEASON ${item.seasonNumber} ADDED"
+        }
+        item.episodeNumber != null -> {
+            val s = if (item.seasonNumber != null) "S${item.seasonNumber} " else ""
+            "${s}EP ${item.episodeNumber} ADDED"
+        }
+        item.seasonNumber != null -> {
+            "SEASON ${item.seasonNumber} ADDED"
         }
         else -> "NEW RELEASE"
     }
+}
+
+private val UpdatePosterShape = RoundedCornerShape(14.dp)
+private val UpdateBottomGradient = Brush.verticalGradient(
+    colors = listOf(
+        Color.Transparent,
+        Color.Black.copy(alpha = 0.22f),
+        Color.Black.copy(alpha = 0.85f)
+    )
+)
+
+@Composable
+private fun WebsiteUpdateCard(
+    update: UpdateItem,
+    onClick: () -> Unit
+) {
+    val badgeText = remember(update) { getWebsiteUpdateBadgeText(update) }
+    val imageRequest = rememberPosterImageRequest(update.posterUrl, 300, 450)
 
     Column(
         modifier = Modifier
-            .width(140.dp)
-            .clickable(onClick = onClick)
+            .width(142.dp)
+            .bounceClick(onClick = onClick)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(195.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .height(206.dp)
+                .clip(UpdatePosterShape)
+                .background(themeCard())
+                .border(1.dp, themeBorder(), UpdatePosterShape)
         ) {
-            val context = LocalContext.current
-            val posterRequest = remember(item.posterUrl) {
-                ImageRequest.Builder(context)
-                    .data(item.posterUrl)
-                    .size(Size(280, 410))
-                    .precision(Precision.INEXACT)
-                    .build()
+            if (imageRequest != null) {
+                AsyncImage(
+                    model = imageRequest,
+                    contentDescription = update.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = NexiSvgIcons.Movies,
+                        contentDescription = null,
+                        tint = TextGray,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
             }
-            AsyncImage(
-                model = posterRequest,
-                contentDescription = item.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
 
-            // Bottom dark gradient overlay
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(70.dp)
-                    .align(Alignment.BottomCenter)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))))
-            )
-
-            // Top-Left "NEW" badge
+            // Bottom gradient overlay (`bg-gradient-to-t from-black/80 via-black/20 to-transparent`)
             Box(
                 modifier = Modifier
-                    .padding(6.dp)
-                    .align(Alignment.TopStart)
-                    .background(SuccessGreen, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text("NEW", fontSize = 8.sp, fontWeight = FontWeight.Black, color = Color.Black)
-            }
+                    .fillMaxSize()
+                    .background(UpdateBottomGradient)
+            )
 
-            // Top-Right Content Type badge
+            // Top-left "NEW" violet badge
             Box(
-                Modifier
-                    .padding(6.dp)
-                    .align(Alignment.TopEnd)
-                    .background(NexiRed, RoundedCornerShape(6.dp))
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .background(Color(0xFF7C3AED).copy(alpha = 0.92f), RoundedCornerShape(5.dp))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
-                    (item.contentType ?: "movie").uppercase(),
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    text = "NEW",
+                    color = Color.White,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = InterFont,
+                    letterSpacing = 0.4.sp
                 )
             }
 
-            // Bottom Update Badge Text (e.g. S1 EP 5 ADDED)
+            // Top-right content_type dark glass badge
+            if (!update.contentType.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(5.dp))
+                        .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(5.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = update.contentType.uppercase(),
+                        color = Color(0xFFD1D5DB),
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = InterFont
+                    )
+                }
+            }
+
+            // Bottom-left update status badge (`S1 EP 5 ADDED` / `NEW RELEASE`)
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(6.dp)
-                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .background(Color(0xFF6D28D9).copy(alpha = 0.92f), RoundedCornerShape(6.dp))
+                    .border(0.5.dp, Color(0xFFA78BFA).copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
             ) {
                 Text(
-                    badgeText,
+                    text = badgeText,
+                    color = Color.White,
                     fontSize = 9.sp,
-                    fontWeight = FontWeight.Black,
-                    color = CoinGold,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = InterFont,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(7.dp))
 
         Text(
-            text = item.title,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
+            text = update.title,
             color = themeTextPrimary(),
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = InterFont,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
             lineHeight = 16.sp,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 2.dp)
         )
     }
 }
 
-// ═══════════════════════════════════════════════════
-// Web-Matching Upcoming Section
-// ═══════════════════════════════════════════════════
+/**
+ * Matches `src/components/UpcomingSlider.tsx` card styling with SVG Calendar icon
+ */
 @Composable
-private fun UpcomingSection(
-    items: List<Upcoming>,
-    navController: NavController
-) {
-    val activity = LocalContext.current as? Activity
-
-    Column(modifier = Modifier.padding(bottom = 20.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("🔥 Upcoming Releases", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
-            Text("COMING SOON", fontSize = 11.sp, color = NexiRed, fontWeight = FontWeight.Bold)
+private fun WebsiteUpcomingCard(item: Upcoming) {
+    val imageRequest = rememberPosterImageRequest(item.posterUrl, 480, 280)
+    Box(
+        modifier = Modifier
+            .width(240.dp)
+            .height(138.dp)
+            .clip(UpdatePosterShape)
+            .background(themeCard())
+            .border(1.dp, themeBorder(), UpdatePosterShape)
+    ) {
+        if (imageRequest != null) {
+            AsyncImage(
+                model = imageRequest,
+                contentDescription = item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items, key = { it.id }) { item ->
-                UpcomingCard(
-                    item = item,
-                    onClick = {
-                        val rawSlug = item.slug.removePrefix("/")
-                        val parts = rawSlug.split("/")
-                        val type = if (parts.size >= 2) parts[0] else item.type
-                        val cleanSlug = if (parts.size >= 2) parts[1] else rawSlug
-                        val targetRoute = Screen.ContentDetail.createRoute(type, cleanSlug)
-
-                        val act = activity
-                        if (act != null) {
-                            AdManager.showInterstitialAd(act) {
-                                navController.navigate(targetRoute)
-                            }
-                        } else {
-                            navController.navigate(targetRoute)
-                        }
-                    }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            themeBg().copy(alpha = 0.92f)
+                        )
+                    )
                 )
+        )
+
+        // Top-left type pill
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp)
+                .background(Color(0xFF111116).copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                .border(0.5.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 7.dp, vertical = 3.dp)
+        ) {
+            Text(
+                text = item.type.uppercase(),
+                color = NexiRedLight,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = InterFont
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(10.dp)
+        ) {
+            Text(
+                text = item.title,
+                color = TextWhite,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = InterFont,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (!item.releaseDate.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = NexiSvgIcons.Calendar,
+                        contentDescription = null,
+                        tint = CoinGold,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = item.releaseDate,
+                        color = CoinGold,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = InterFont
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * Website Hamburger Menu Drawer (`src/components/Header.tsx` lines 199-245)
+ * Includes all website navigation links + app features with 100% SVG icons.
+ */
 @Composable
-private fun UpcomingCard(item: Upcoming, onClick: () -> Unit) {
-    val (statusColor, statusBg) = when (item.status.lowercase()) {
-        "confirmed" -> SuccessGreen to SuccessGreen.copy(alpha = 0.2f)
-        "delayed" -> NexiRed to NexiRed.copy(alpha = 0.2f)
-        else -> Color(0xFF3B82F6) to Color(0xFF3B82F6).copy(alpha = 0.2f)
+private fun WebsiteNavigationDrawerContent(
+    telegramText: String,
+    onDismiss: () -> Unit,
+    onNavigateRoute: (String) -> Unit,
+    onNavigateBrowseTab: (Int) -> Unit,
+    onOpenTelegram: () -> Unit
+) {
+    val links = remember {
+        listOf(
+            WebsiteDrawerLink("Home", "Featured & latest streams", NexiSvgIcons.Home, NexiRed) {
+                onDismiss()
+            },
+            WebsiteDrawerLink("Movies", "Full HD & 4K movies", NexiSvgIcons.Movies, Color(0xFF8B5CF6)) {
+                onNavigateBrowseTab(1)
+            },
+            WebsiteDrawerLink("Series", "Web series & TV shows", NexiSvgIcons.Series, Color(0xFFA855F7)) {
+                onNavigateBrowseTab(3)
+            },
+            WebsiteDrawerLink("Anime", "Subbed & dubbed anime", NexiSvgIcons.Anime, Color(0xFFEC4899)) {
+                onNavigateBrowseTab(2)
+            },
+            WebsiteDrawerLink("Live TV", "Sports, news & radio", NexiSvgIcons.LiveTv, SuccessGreen) {
+                onNavigateRoute(Screen.LiveTv.route)
+            },
+            WebsiteDrawerLink("Games", "1,000+ HTML5 arcade games", NexiSvgIcons.Gamepad, InfoBlue) {
+                onNavigateRoute(Screen.Games.route)
+            },
+            WebsiteDrawerLink("Vibe Check", "AI mood movie matcher", NexiSvgIcons.VibeSparkles, NexiRedLight) {
+                onNavigateRoute(Screen.VibeCheck.route)
+            },
+            WebsiteDrawerLink("Novels", "Read web novels & fiction", NexiSvgIcons.Novels, Color(0xFFF472B6)) {
+                onNavigateRoute(Screen.Novels.route)
+            },
+            WebsiteDrawerLink("VIP & Coins", "Rewards, spin wheel & VIP", NexiSvgIcons.Crown, CoinGold) {
+                onNavigateRoute(Screen.Coins.route)
+            },
+            WebsiteDrawerLink("Nexi AI Bot", "Ask AI for recommendations", NexiSvgIcons.Bot, Color(0xFF818CF8)) {
+                onNavigateRoute(Screen.Chatbot.route)
+            },
+            WebsiteDrawerLink("Leaderboard", "Top community members", NexiSvgIcons.Trophy, CoinGold) {
+                onNavigateRoute(Screen.Leaderboard.route)
+            },
+            WebsiteDrawerLink("Watchlist", "Saved movies & series", NexiSvgIcons.Bookmark, SuccessGreen) {
+                onNavigateRoute(Screen.Watchlist.route)
+            },
+            WebsiteDrawerLink("Downloads", "Offline video library", NexiSvgIcons.Download, InfoBlue) {
+                onNavigateRoute("downloads")
+            },
+            WebsiteDrawerLink("Request Title", "Ask us to upload content", NexiSvgIcons.PlusCircle, NexiRed) {
+                onNavigateRoute(Screen.RequestContent.route)
+            },
+            WebsiteDrawerLink("Settings", "App preferences & account", NexiSvgIcons.Settings, TextGray) {
+                onNavigateRoute(Screen.Settings.route)
+            }
+        )
     }
 
     Column(
         modifier = Modifier
-            .width(135.dp)
-            .clickable(onClick = onClick)
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 20.dp)
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(190.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .padding(bottom = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            val context = LocalContext.current
-            val posterRequest = remember(item.posterUrl) {
-                ImageRequest.Builder(context)
-                    .data(item.posterUrl)
-                    .size(Size(280, 410))
-                    .precision(Precision.INEXACT)
-                    .build()
-            }
-            AsyncImage(
-                model = posterRequest,
-                contentDescription = item.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            // Top-Right Content Type Badge
-            Box(
-                Modifier
-                    .padding(6.dp)
-                    .align(Alignment.TopEnd)
-                    .background(NexiRed, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
+            Column {
                 Text(
-                    item.type.uppercase(),
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    text = "Navigation Menu",
+                    color = themeTextPrimary(),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = InterFont
+                )
+                Text(
+                    text = "All Nexiplay sections & tools",
+                    color = themeTextSecondary(),
+                    fontSize = 11.5.sp,
+                    fontFamily = InterFont
                 )
             }
 
-            // Bottom Status Badge
+            // Telegram CTA Button matching `Header.tsx` line 219
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(6.dp)
-                    .background(statusBg, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF229ED9).copy(alpha = 0.16f))
+                    .border(1.dp, Color(0xFF229ED9).copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                    .bounceClick(onClick = onOpenTelegram)
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
             ) {
-                Text(
-                    item.status.uppercase(),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Black,
-                    color = statusColor
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = NexiSvgIcons.Telegram,
+                        contentDescription = "Telegram",
+                        tint = Color(0xFF229ED9),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = telegramText,
+                        color = Color(0xFF229ED9),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = InterFont
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            text = item.title,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = themeTextPrimary(),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = item.releaseDate,
-            fontSize = 11.sp,
-            color = themeTextSecondary(),
-            maxLines = 1,
-        )
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.heightIn(max = 460.dp)
+        ) {
+            items(links, key = { it.label }) { item ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(themeCard())
+                        .border(1.dp, themeBorder(), RoundedCornerShape(14.dp))
+                        .bounceClick(onClick = item.onClick)
+                        .padding(11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(item.accent.copy(alpha = if (isDark) 0.16f else 0.12f))
+                            .border(0.8.dp, item.accent.copy(alpha = if (isDark) 0.32f else 0.25f), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = item.label,
+                            tint = item.accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.label,
+                            color = themeTextPrimary(),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = InterFont,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = item.subtitle,
+                            color = themeTextSecondary(),
+                            fontSize = 10.sp,
+                            fontFamily = InterFont,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
+@Composable
+private fun HomeLoadingSkeleton() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = 24.dp)
+    ) {
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(380.dp),
+            cornerRadius = 0
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .height(46.dp),
+            cornerRadius = 14
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            repeat(3) {
+                ShimmerBox(
+                    modifier = Modifier
+                        .width(140.dp)
+                        .height(210.dp),
+                    cornerRadius = 14
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeErrorView(
+    message: String,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = message,
+                color = TextWhite,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = InterFont
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text(
+                    text = "Retry",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = InterFont
+                )
+            }
+        }
+    }
+}

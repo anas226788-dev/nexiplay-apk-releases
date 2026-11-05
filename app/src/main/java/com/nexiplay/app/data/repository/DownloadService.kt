@@ -73,7 +73,7 @@ class DownloadService : Service() {
             val fileName = intent.getStringExtra(EXTRA_FILENAME) ?: "video.mp4"
             val title = intent.getStringExtra(EXTRA_TITLE) ?: "Downloading"
 
-            val notificationId = url.hashCode()
+            val notificationId = (url.hashCode() and 0x7FFFFFFF).coerceAtLeast(1)
 
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title)
@@ -84,23 +84,31 @@ class DownloadService : Service() {
                 .setProgress(100, 0, true)
                 .build()
 
-            startForeground(notificationId, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    notificationId,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(notificationId, notification)
+            }
 
             scope.launch {
-                performDownload(url, fileName, title, notificationId)
+                performDownload(url, fileName, title, notificationId, startId)
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
-    private suspend fun performDownload(url: String, fileName: String, title: String, notificationId: Int) {
+    private suspend fun performDownload(url: String, fileName: String, title: String, notificationId: Int, startId: Int) {
         val settings = SettingsRepository(this)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val sdCardUriStr = settings.sdCardUri
         if (sdCardUriStr == null) {
             stopForeground(true)
-            stopSelf()
+            stopSelf(startId)
             return
         }
 
@@ -108,7 +116,7 @@ class DownloadService : Service() {
         val pickedDir = DocumentFile.fromTreeUri(this, treeUri)
         if (pickedDir == null || !pickedDir.canWrite()) {
             stopForeground(true)
-            stopSelf()
+            stopSelf(startId)
             return
         }
 
@@ -116,7 +124,7 @@ class DownloadService : Service() {
         val file = pickedDir.createFile("video/mp4", fileName)
         if (file == null) {
             stopForeground(true)
-            stopSelf()
+            stopSelf(startId)
             return
         }
 
@@ -128,7 +136,7 @@ class DownloadService : Service() {
 
         if (outStream == null) {
             stopForeground(true)
-            stopSelf()
+            stopSelf(startId)
             return
         }
 
@@ -201,6 +209,7 @@ class DownloadService : Service() {
             nm.notify(notificationId, notif)
         } finally {
             stopForeground(false)
+            stopSelf(startId)
         }
     }
 }

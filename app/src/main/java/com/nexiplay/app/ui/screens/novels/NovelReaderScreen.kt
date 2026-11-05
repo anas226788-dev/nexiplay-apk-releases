@@ -87,10 +87,10 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                                         cdnContent = json.optString("content", "")
                                     }
                                 } else {
-                                    cdnError = "CDN returned HTTP ${resp.code}"
+                                    cdnError = "The chapter content is temporarily unavailable."
                                 }
                             } catch (e: Exception) {
-                                cdnError = e.localizedMessage ?: "Failed to connect to CDN"
+                                cdnError = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't connect to load this chapter.")
                             }
                         }
 
@@ -112,7 +112,7 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                     .decodeList<NovelChapter>()
                 totalChapters = allChapters.firstOrNull()?.chapterNumber ?: maxOf(num, totalChapters)
             } catch (e: Exception) {
-                error = e.localizedMessage ?: "Failed to load chapter details"
+                error = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load chapter details. Please try again.")
             }
             loading = false
             scrollState.scrollTo(0)

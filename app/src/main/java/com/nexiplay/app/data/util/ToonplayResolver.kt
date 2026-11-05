@@ -155,7 +155,7 @@ object ToonplayResolver {
 
             ResolveResult(url = m3u8, source = "fresh", languages = languages)
         } catch (e: Exception) {
-            fallback(cachedUrl, e.message ?: "Unknown error")
+            fallback(cachedUrl, "Couldn't connect to the selected streaming source.")
         }
     }
 

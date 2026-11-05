@@ -8,7 +8,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -32,12 +31,12 @@ val InterFont = FontFamily(
     Font(R.font.inter_black, FontWeight.Black),
 )
 
-// ── Theme State (for Day/Night toggle) ──
+// ── Theme State ──
 object ThemeState {
     var isDarkMode by mutableStateOf(true)
 }
 
-// ── Dark Color Scheme ──
+// ── Dark Color Scheme (Hybrid Navy-Black Foundation) ──
 private val DarkColorScheme = darkColorScheme(
     primary = NexiRed,
     onPrimary = TextWhite,
@@ -45,27 +44,29 @@ private val DarkColorScheme = darkColorScheme(
     tertiary = CoinGold,
     background = DarkBg,
     surface = DarkSurface,
-    surfaceVariant = DarkCard,
+    surfaceVariant = DarkSurface2,
     onBackground = TextWhite,
     onSurface = TextWhite,
     onSurfaceVariant = TextGray,
     outline = DarkBorder,
+    outlineVariant = DarkBorderStrong,
     error = ErrorRed,
 )
 
 // ── Light Color Scheme ──
 private val LightColorScheme = lightColorScheme(
     primary = NexiRed,
-    onPrimary = TextWhite,
-    secondary = NexiRedLight,
+    onPrimary = Color.White,
+    secondary = NexiRedDark,
     tertiary = CoinGold,
     background = LightBg,
     surface = LightSurface,
-    surfaceVariant = LightCard,
+    surfaceVariant = Color(0xFFF0ECF6),
     onBackground = TextBlack,
     onSurface = TextBlack,
     onSurfaceVariant = TextLightGray,
     outline = LightBorder,
+    outlineVariant = LightBorderStrong,
     error = ErrorRed,
 )
 
@@ -139,12 +140,13 @@ fun NexiPlayTheme(
             val window = (view.context as Activity).window
             if (darkTheme) {
                 window.statusBarColor = DarkBg.toArgb()
-                window.navigationBarColor = DarkSurface.toArgb()
+                window.navigationBarColor = DarkBg.toArgb()
             } else {
                 window.statusBarColor = LightBg.toArgb()
                 window.navigationBarColor = LightSurface.toArgb()
             }
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkTheme
         }
     }
 
@@ -162,8 +164,10 @@ val isDark: Boolean
 
 @Composable fun themeBg() = if (isDark) DarkBg else LightBg
 @Composable fun themeSurface() = if (isDark) DarkSurface else LightSurface
+@Composable fun themeSurface2() = if (isDark) DarkSurface2 else LightCard
 @Composable fun themeCard() = if (isDark) DarkCard else LightCard
 @Composable fun themeBorder() = if (isDark) DarkBorder else LightBorder
+@Composable fun themeBorderStrong() = if (isDark) DarkBorderStrong else LightBorderStrong
 @Composable fun themeTextPrimary() = if (isDark) TextWhite else TextBlack
 @Composable fun themeTextSecondary() = if (isDark) TextGray else TextLightGray
 @Composable fun themeTextTertiary() = if (isDark) TextDarkGray else TextLightGray

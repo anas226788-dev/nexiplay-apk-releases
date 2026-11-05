@@ -21,6 +21,8 @@ object SupabaseClient {
         defaultSerializer = KotlinXSerializer(Json {
             ignoreUnknownKeys = true
             explicitNulls = false
+            coerceInputValues = true
+            isLenient = true
         })
     }
 
@@ -33,6 +35,8 @@ object SupabaseClient {
         defaultSerializer = KotlinXSerializer(Json {
             ignoreUnknownKeys = true
             explicitNulls = false
+            coerceInputValues = true
+            isLenient = true
         })
     }
 }

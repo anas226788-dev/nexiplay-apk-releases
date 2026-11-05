@@ -296,7 +296,7 @@ fun RegisterScreen(navController: NavController) {
                                     }
                                     success = "Account created! Please check your email (and SPAM folder) to verify."
                                 } catch (e: Exception) {
-                                    error = e.message ?: "Registration failed"
+                                    error = com.nexiplay.app.ui.util.UserFacingError.from(e, "We couldn't create your account. Please try again.")
                                 } finally { loading = false }
                             }
                         }

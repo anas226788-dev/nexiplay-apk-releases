@@ -28,7 +28,9 @@ import com.nexiplay.app.ui.theme.*
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
@@ -47,42 +49,47 @@ fun CommentSection(movieId: String) {
     val user = SupabaseClient.main.auth.currentUserOrNull()
 
     var profilesMap by remember { mutableStateOf<Map<String, com.nexiplay.app.data.model.UserProfile>>(emptyMap()) }
+    var visibleCommentLimit by remember(movieId) { mutableIntStateOf(12) }
 
-    // Fetch comments & commenter profiles
+    // Fetch comments & commenter profiles off the Main UI Thread
     LaunchedEffect(movieId) {
         try {
-            val allComments = SupabaseClient.main.from("comments")
-                .select {
-                    filter { eq("movie_id", movieId) }
-                    order("created_at", order = Order.DESCENDING)
+            val (topLevel, reps, fetchedProfiles) = withContext(Dispatchers.IO) {
+                val allComments = SupabaseClient.main.from("comments")
+                    .select {
+                        filter { eq("movie_id", movieId) }
+                        order("created_at", order = Order.DESCENDING)
+                    }
+                    .decodeList<Comment>()
+
+                val commentUserIds = allComments.map { it.userId }.distinct()
+                val currentUserId = user?.id
+                val userIds = if (currentUserId != null) {
+                    (commentUserIds + currentUserId).distinct()
+                } else {
+                    commentUserIds
                 }
-                .decodeList<Comment>()
-
-            val commentUserIds = allComments.map { it.userId }.distinct()
-            // Always include current user so their avatar + badge shows in the input area
-            val currentUserId = user?.id
-            val userIds = if (currentUserId != null) {
-                (commentUserIds + currentUserId).distinct()
-            } else {
-                commentUserIds
-            }
-            if (userIds.isNotEmpty()) {
-                try {
-                    val pList = SupabaseClient.main.from("profiles")
-                        .select(io.github.jan.supabase.postgrest.query.Columns.list(
-                            "id", "display_name", "avatar_url", "vip_badge", "vip_badge_expires"
-                        )) { filter { isIn("id", userIds) } }
-                        .decodeList<com.nexiplay.app.data.model.UserProfile>()
-                    profilesMap = pList.associateBy { it.id }
-                    android.util.Log.d("CommentSection", "Fetched ${pList.size} profiles, badges: ${pList.map { "${it.id}=${it.vipBadge}" }}")
-                } catch (e: Exception) {
-                    android.util.Log.e("CommentSection", "Failed to fetch profiles: ${e.message}")
+                val pMap = if (userIds.isNotEmpty()) {
+                    try {
+                        val pList = SupabaseClient.main.from("profiles")
+                            .select(io.github.jan.supabase.postgrest.query.Columns.list(
+                                "id", "display_name", "avatar_url", "vip_badge", "vip_badge_expires"
+                            )) { filter { isIn("id", userIds) } }
+                            .decodeList<com.nexiplay.app.data.model.UserProfile>()
+                        pList.associateBy { it.id }
+                    } catch (_: Exception) {
+                        emptyMap()
+                    }
+                } else {
+                    emptyMap()
                 }
+
+                val rootList = allComments.filter { it.parentId == null }
+                val replyMap = allComments.filter { it.parentId != null }.groupBy { it.parentId!! }
+                Triple(rootList, replyMap, pMap)
             }
 
-            val topLevel = allComments.filter { it.parentId == null }
-            val reps = allComments.filter { it.parentId != null }.groupBy { it.parentId!! }
-
+            profilesMap = fetchedProfiles
             comments = topLevel
             replies = reps
         } catch (e: Exception) {
@@ -244,28 +251,48 @@ fun CommentSection(movieId: String) {
         } else if (comments.isEmpty()) {
             Text("No comments yet. Be the first to comment!", color = themeTextTertiary(), fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         } else {
-            comments.forEach { comment ->
-                CommentItem(
-                    comment = comment,
-                    userProfile = profilesMap[comment.userId],
-                    onReply = {
-                        replyingToId = comment.id
-                        replyingToName = comment.name
+            val displayedComments = remember(comments, visibleCommentLimit) {
+                comments.take(visibleCommentLimit)
+            }
+            displayedComments.forEach { comment ->
+                key(comment.id ?: comment.hashCode()) {
+                    CommentItem(
+                        comment = comment,
+                        userProfile = profilesMap[comment.userId],
+                        onReply = {
+                            replyingToId = comment.id
+                            replyingToName = comment.name
+                        }
+                    )
+                    // Replies
+                    replies[comment.id]?.forEach { reply ->
+                        Row {
+                            Spacer(Modifier.width(36.dp))
+                            CommentItem(
+                                comment = reply,
+                                userProfile = profilesMap[reply.userId],
+                                onReply = {
+                                    replyingToId = comment.id // replies attach to root comment
+                                    replyingToName = reply.name
+                                }
+                            )
+                        }
                     }
-                )
-                // Replies
-                replies[comment.id]?.forEach { reply ->
-                    Row {
-                        Spacer(Modifier.width(36.dp))
-                        CommentItem(
-                            comment = reply,
-                            userProfile = profilesMap[reply.userId],
-                            onReply = {
-                                replyingToId = comment.id // replies attach to root comment
-                                replyingToName = reply.name
-                            }
-                        )
-                    }
+                }
+            }
+            if (comments.size > visibleCommentLimit) {
+                Spacer(Modifier.height(10.dp))
+                TextButton(
+                    onClick = { visibleCommentLimit += 15 },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text(
+                        "Show More Comments (${comments.size - visibleCommentLimit} remaining)",
+                        color = NexiRed,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = InterFont
+                    )
                 }
             }
         }
@@ -278,7 +305,15 @@ fun CommentItem(
     userProfile: com.nexiplay.app.data.model.UserProfile? = null,
     onReply: () -> Unit
 ) {
-    val badge = userProfile?.vipBadge?.lowercase()?.trim() ?: ""
+    val isBadgeActive = remember(userProfile?.vipBadgeExpires) {
+        val expStr = userProfile?.vipBadgeExpires
+        if (expStr.isNullOrBlank()) true
+        else {
+            val exp = com.nexiplay.app.data.util.AdManager.parseDateRobust(expStr)
+            exp == null || exp.isAfter(java.time.Instant.now())
+        }
+    }
+    val badge = if (isBadgeActive) (userProfile?.vipBadge?.lowercase()?.trim() ?: "") else ""
     val isElite = badge.contains("elite") || badge == "gold_vip"
     val isVip = !isElite && badge.contains("vip")
 
@@ -288,7 +323,7 @@ fun CommentItem(
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF1E1B2E))
-            .border(1.dp, Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA855F7))), RoundedCornerShape(12.dp))
+            .border(1.dp, Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFF9273F5))), RoundedCornerShape(12.dp))
             .padding(10.dp)
     } else if (isVip) {
         Modifier
@@ -296,7 +331,7 @@ fun CommentItem(
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF231F14))
-            .border(1.dp, Color(0xFFFFD700).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFFFFB878).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
             .padding(10.dp)
     } else {
         Modifier
@@ -322,8 +357,8 @@ fun CommentItem(
                     .size(36.dp)
                     .clip(CircleShape)
                     .background(
-                        if (isElite) Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA855F7)))
-                        else if (isVip) Brush.linearGradient(listOf(Color(0xFFFFD700), Color(0xFFFFA500)))
+                        if (isElite) Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFF9273F5)))
+                        else if (isVip) Brush.linearGradient(listOf(Color(0xFFFFB878), Color(0xFFFFA500)))
                         else Brush.linearGradient(listOf(themeSurface(), themeCard()))
                     ),
                 contentAlignment = Alignment.Center
@@ -341,7 +376,7 @@ fun CommentItem(
 
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val nameColor = if (isElite) Color(0xFF7EE8FA) else if (isVip) Color(0xFFFFD700) else themeTextPrimary()
+                val nameColor = if (isElite) Color(0xFF7EE8FA) else if (isVip) Color(0xFFFFB878) else themeTextPrimary()
 
                 Text(
                     text = userProfile?.displayName ?: comment.name,
@@ -356,7 +391,7 @@ fun CommentItem(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA855F7))))
+                            .background(Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFF9273F5))))
                             .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(
@@ -371,7 +406,7 @@ fun CommentItem(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFFFFD700))
+                            .background(Color(0xFFFFB878))
                             .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(

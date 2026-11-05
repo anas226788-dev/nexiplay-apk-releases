@@ -52,7 +52,7 @@ fun CommentsScreen(navController: NavController) {
                         .decodeList<Comment>()
                     comments = data
                 } catch (e: Exception) {
-                    errorMessage = e.localizedMessage ?: "Failed to load comments"
+                    errorMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load your comments. Please try again.")
                 }
                 loading = false
             }

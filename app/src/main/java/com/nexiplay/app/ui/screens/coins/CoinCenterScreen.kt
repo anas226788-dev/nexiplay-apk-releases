@@ -43,6 +43,7 @@ import androidx.navigation.NavController
 import com.nexiplay.app.R
 import com.nexiplay.app.data.util.AdManager
 import com.nexiplay.app.ui.components.bounceClick
+import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
 import com.nexiplay.app.util.findActivity
 import kotlinx.coroutines.launch
@@ -135,9 +136,9 @@ fun CoinCenterScreen(navController: NavController, vm: CoinViewModel = viewModel
             Spacer(Modifier.height(24.dp))
             InviteFriendsSection(state, vm, context)
             Spacer(Modifier.height(24.dp))
-            EarnCoinsSection(activity, context, vm, isAdLoading = isAdLoading, onAdLoadChange = { isAdLoading = it })
+            EarnCoinsSection(state, activity, context, vm, navController = navController, isAdLoading = isAdLoading, onAdLoadChange = { isAdLoading = it })
             Spacer(Modifier.height(24.dp))
-            CoinShopSection(state, vm, context)
+            CoinShopSection(state, vm, context, navController)
         }
     }
 }
@@ -476,7 +477,7 @@ private fun AchievementsSection() {
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AchievementItem("Starter", "⭐", isUnlocked = true)
-            AchievementItem("Striker", "⚡", isUnlocked = true, color = Color(0xFFA855F7))
+            AchievementItem("Striker", "⚡", isUnlocked = true, color = Color(0xFF9273F5))
             AchievementItem("On Fire", "🔥", isUnlocked = false)
             AchievementItem("Diamond", "💎", isUnlocked = false)
             AchievementItem("Legend", "👑", isUnlocked = false)
@@ -634,7 +635,7 @@ private fun InviteFriendsSection(state: CoinState, vm: CoinViewModel, context: C
                                 if (result.isSuccess) {
                                     Toast.makeText(context, result.getOrNull(), Toast.LENGTH_LONG).show()
                                 } else {
-                                    Toast.makeText(context, result.exceptionOrNull()?.message ?: "Failed", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, result.exceptionOrNull()?.let { com.nexiplay.app.ui.util.UserFacingError.from(it, "Couldn't redeem that code. Please try again.") } ?: "Couldn't redeem that code. Please try again.", Toast.LENGTH_LONG).show()
                                 }
                                 isRedeeming = false
                                 referralCodeInput = ""
@@ -660,7 +661,7 @@ private fun InviteFriendsSection(state: CoinState, vm: CoinViewModel, context: C
 }
 
 @Composable
-private fun EarnCoinsSection(activity: android.app.Activity?, context: Context, vm: CoinViewModel, isAdLoading: Boolean, onAdLoadChange: (Boolean) -> Unit) {
+private fun EarnCoinsSection(state: CoinState, activity: android.app.Activity?, context: Context, vm: CoinViewModel, navController: NavController, isAdLoading: Boolean, onAdLoadChange: (Boolean) -> Unit) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Earn Coins", fontFamily = JakartaFont, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
@@ -703,8 +704,8 @@ private fun EarnCoinsSection(activity: android.app.Activity?, context: Context, 
         )
 
         // Standard Tasks
-        val currentStreak = vm.state.value.streak?.currentStreak ?: 0
-        val longestStreak = vm.state.value.streak?.longestStreak ?: 0
+        val currentStreak = state.streak?.currentStreak ?: 0
+        val longestStreak = state.streak?.longestStreak ?: 0
         val is7Eligible = currentStreak >= 7 || longestStreak >= 7
         val is30Eligible = currentStreak >= 30 || longestStreak >= 30
         val is7Claimed = vm.isStreakMilestoneClaimed(7, context)
@@ -765,7 +766,9 @@ private fun EarnCoinsSection(activity: android.app.Activity?, context: Context, 
         )
         TaskItem("Refer a Friend", "Share your code", Icons.Rounded.Handshake, "+50")
         TaskItem("Post Comment", "Share your thoughts", Icons.Rounded.Forum, "+1")
-        TaskItem("Report Issue", "Help us improve", Icons.Rounded.BugReport, "+20")
+        TaskItem("Report Issue", "Help us improve", Icons.Rounded.BugReport, "+20") {
+            navController.navigate(Screen.Contact.route)
+        }
     }
 }
 
@@ -818,7 +821,7 @@ private fun TaskItem(title: String, desc: String, icon: androidx.compose.ui.grap
 }
 
 @Composable
-private fun CoinShopSection(state: CoinState, vm: CoinViewModel, context: Context) {
+private fun CoinShopSection(state: CoinState, vm: CoinViewModel, context: Context, navController: NavController) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Coin Shop", fontFamily = JakartaFont, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
@@ -858,8 +861,8 @@ private fun CoinShopSection(state: CoinState, vm: CoinViewModel, context: Contex
 
         ShopItemRow("Ad-Free 24h", "No ads for 24 hours", 100, ErrorRed) { vm.buyAdFree(1, 100, context) }
         ShopItemRow("Ad-Free 7d", "No ads for 7 days", 250, ErrorRed) { vm.buyAdFree(7, 250, context) }
-        ShopItemRow("Priority Request", "Your content request goes first", 30, ErrorRed) { }
-        ShopItemRow("VIP Badge", "Gold Badge + Ad-Free for 30 days", 250, Color(0xFFFFD700)) { vm.buyVipBadge("vip", 30, 250, context) }
+        ShopItemRow("Priority Request", "Your content request goes first", 30, ErrorRed) { navController.navigate(Screen.RequestContent.route) }
+        ShopItemRow("VIP Badge", "Gold Badge + Ad-Free for 30 days", 250, Color(0xFFFFB878)) { vm.buyVipBadge("vip", 30, 250, context) }
         ShopItemRow("ELITE PRO", "Diamond Badge + 2x Coins & 1080p for 30 days", 500, CoinGoldPrimary) { vm.buyVipBadge("elite_pro", 30, 500, context) }
         ShopItemRow("Double Coin Boost", "2x coins for 24 hours", 100, Color(0xFF06B6D4)) { vm.buyDoubleCoinBoost(context) }
     }

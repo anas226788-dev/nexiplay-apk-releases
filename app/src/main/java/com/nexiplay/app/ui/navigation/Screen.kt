@@ -44,5 +44,8 @@ sealed class Screen(val route: String) {
     data object Contact : Screen("contact")
     data object Leaderboard : Screen("leaderboard")
     data object Chatbot : Screen("chatbot")
+    data object VibeCheck : Screen("vibe_check")
+    data object LiveTv : Screen("live_tv")
+    data object Games : Screen("games")
     data object Splash : Screen("splash")
 }

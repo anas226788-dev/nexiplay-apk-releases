@@ -35,11 +35,15 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
+import com.nexiplay.app.data.GoogleAuth
+import com.nexiplay.app.data.GoogleSignInNotConfiguredException
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.ui.components.bounceClick
 import com.nexiplay.app.ui.components.shimmerEffect
 import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
+import com.nexiplay.app.ui.util.UserFacingError
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
 import kotlinx.coroutines.launch
@@ -50,10 +54,12 @@ fun LoginScreen(navController: NavController) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
+    var googleLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // Track focus state for animated borders
     var emailFocused by remember { mutableStateOf(false) }
@@ -354,7 +360,7 @@ fun LoginScreen(navController: NavController) {
                                         popUpTo(0) { inclusive = true }
                                     }
                                 } catch (e: Exception) {
-                                    error = e.message ?: "Login failed"
+                                    error = UserFacingError.from(e, "We couldn't sign you in. Please try again.")
                                 } finally {
                                     loading = false
                                 }
@@ -384,6 +390,53 @@ fun LoginScreen(navController: NavController) {
                     color = themeTextPrimary(),
                 )
             }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            HorizontalDivider(Modifier.weight(1f), color = themeBorder())
+            Text("  OR  ", color = themeTextTertiary(), fontSize = 11.sp, fontFamily = InterFont)
+            HorizontalDivider(Modifier.weight(1f), color = themeBorder())
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    googleLoading = true
+                    error = null
+                    try {
+                        GoogleAuth.signIn(context)
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    } catch (_: GoogleSignInNotConfiguredException) {
+                        error = "Google sign-in setup is incomplete. Add the Google Web OAuth client ID to the app configuration."
+                    } catch (e: Exception) {
+                        val isCancelled = e.javaClass.simpleName.contains("cancel", ignoreCase = true)
+                        if (!isCancelled) error = UserFacingError.from(e, "Google sign-in didn't finish. Please try again.")
+                    } finally {
+                        googleLoading = false
+                    }
+                }
+            },
+            enabled = !loading && !googleLoading,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = themeTextPrimary()),
+            border = androidx.compose.foundation.BorderStroke(1.dp, themeBorder()),
+        ) {
+            if (googleLoading) {
+                CircularProgressIndicator(Modifier.size(19.dp), strokeWidth = 2.dp, color = NexiRed)
+                Spacer(Modifier.width(10.dp))
+            } else {
+                Text("G", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary())
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(if (googleLoading) "Connecting to Google…" else "Continue with Google", fontFamily = InterFont, fontWeight = FontWeight.SemiBold)
         }
 
         Spacer(Modifier.height(20.dp))
@@ -455,7 +508,7 @@ fun LoginScreen(navController: NavController) {
                                     android.widget.Toast.makeText(context, "Password reset email sent!", android.widget.Toast.LENGTH_LONG).show()
                                     showForgotPasswordDialog = false
                                 } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, e.message ?: "Failed to send email", android.widget.Toast.LENGTH_LONG).show()
+                                    android.widget.Toast.makeText(context, UserFacingError.from(e, "Couldn't send the reset email. Please try again."), android.widget.Toast.LENGTH_LONG).show()
                                 } finally {
                                     isResetting = false
                                 }

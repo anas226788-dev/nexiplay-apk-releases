@@ -32,7 +32,7 @@ import com.nexiplay.app.data.model.LeaderboardEntry
 import com.nexiplay.app.ui.theme.*
 
 // Colors for Podium Ranks
-private val GoldRankColor = Color(0xFFFFD700)
+private val GoldRankColor = Color(0xFFFFB878)
 private val SilverRankColor = Color(0xFFE0E0E0)
 private val BronzeRankColor = Color(0xFFCD7F32)
 
@@ -58,8 +58,8 @@ fun LeaderboardCard(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     listOf(
-                        Color(0xFFFFD700).copy(alpha = 0.5f),
-                        Color(0xFFA855F7).copy(alpha = 0.3f),
+                        Color(0xFFFFB878).copy(alpha = 0.5f),
+                        Color(0xFF9273F5).copy(alpha = 0.3f),
                         Color.White.copy(alpha = 0.1f)
                     )
                 ),
@@ -87,7 +87,7 @@ fun LeaderboardCard(
                         .clip(CircleShape)
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFFFFD700), Color(0xFFFFA500))
+                                listOf(Color(0xFFFFB878), Color(0xFFFFA500))
                             )
                         ),
                     contentAlignment = Alignment.Center
@@ -114,14 +114,14 @@ fun LeaderboardCard(
                         Spacer(Modifier.width(8.dp))
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFFFD700).copy(alpha = 0.15f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFD700).copy(alpha = 0.3f))
+                            color = Color(0xFFFFB878).copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB878).copy(alpha = 0.3f))
                         ) {
                             Text(
                                 text = "TOP 15",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Black,
-                                color = Color(0xFFFFD700),
+                                color = Color(0xFFFFB878),
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -150,7 +150,7 @@ fun LeaderboardCard(
                         .height(140.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = Color(0xFFFFD700), modifier = Modifier.size(32.dp))
+                    CircularProgressIndicator(color = Color(0xFFFFB878), modifier = Modifier.size(32.dp))
                 }
             } else if (entries.isEmpty()) {
                 Text(
@@ -315,7 +315,7 @@ private fun PodiumUserItem(
             text = if (isCurrentUser) "${entry.name} (YOU)" else entry.name,
             fontWeight = FontWeight.Bold,
             fontSize = if (isWinner) 13.sp else 12.sp,
-            color = if (isCurrentUser) Color(0xFFFFD700) else Color.White,
+            color = if (isCurrentUser) Color(0xFFFFB878) else Color.White,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
@@ -329,7 +329,7 @@ private fun PodiumUserItem(
                 shape = RoundedCornerShape(4.dp),
                 color = Color.Transparent,
                 modifier = Modifier.background(
-                    Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA855F7))),
+                    Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFF9273F5))),
                     RoundedCornerShape(4.dp)
                 )
             ) {
@@ -344,7 +344,7 @@ private fun PodiumUserItem(
         } else if (isVip) {
             Surface(
                 shape = RoundedCornerShape(4.dp),
-                color = Color(0xFFFFD700)
+                color = Color(0xFFFFB878)
             ) {
                 Text(
                     text = "👑 VIP",
@@ -363,7 +363,7 @@ private fun PodiumUserItem(
             text = "${entry.coins} 🪙",
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFFFD700)
+            color = Color(0xFFFFB878)
         )
 
         // Watched Count
@@ -390,12 +390,12 @@ private fun LeaderboardListRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(
-                if (isCurrentUser) Color(0xFFFFD700).copy(alpha = 0.12f)
+                if (isCurrentUser) Color(0xFFFFB878).copy(alpha = 0.12f)
                 else Color.White.copy(alpha = 0.04f)
             )
             .border(
                 width = if (isCurrentUser) 1.dp else 0.5.dp,
-                color = if (isCurrentUser) Color(0xFFFFD700).copy(alpha = 0.6f)
+                color = if (isCurrentUser) Color(0xFFFFB878).copy(alpha = 0.6f)
                 else Color.White.copy(alpha = 0.08f),
                 shape = RoundedCornerShape(14.dp)
             )
@@ -406,7 +406,7 @@ private fun LeaderboardListRow(
             text = "#${entry.rank}",
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
-            color = if (isCurrentUser) Color(0xFFFFD700) else Color.White.copy(alpha = 0.6f),
+            color = if (isCurrentUser) Color(0xFFFFB878) else Color.White.copy(alpha = 0.6f),
             modifier = Modifier.width(28.dp)
         )
 
@@ -451,7 +451,7 @@ private fun LeaderboardListRow(
                     text = if (isCurrentUser) "${entry.name} (YOU)" else entry.name,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (isCurrentUser) Color(0xFFFFD700) else Color.White,
+                    color = if (isCurrentUser) Color(0xFFFFB878) else Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -462,7 +462,7 @@ private fun LeaderboardListRow(
                         modifier = Modifier
                             .clip(RoundedCornerShape(3.dp))
                             .background(
-                                Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFFA855F7)))
+                                Brush.linearGradient(listOf(Color(0xFF7EE8FA), Color(0xFF9273F5)))
                             )
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
@@ -473,7 +473,7 @@ private fun LeaderboardListRow(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(3.dp))
-                            .background(Color(0xFFFFD700))
+                            .background(Color(0xFFFFB878))
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text("👑 VIP", fontSize = 8.sp, fontWeight = FontWeight.Black, color = Color.Black)
@@ -494,7 +494,7 @@ private fun LeaderboardListRow(
                 text = "${entry.coins}",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFFFD700)
+                color = Color(0xFFFFB878)
             )
             Spacer(Modifier.width(3.dp))
             Text(text = "🪙", fontSize = 11.sp)

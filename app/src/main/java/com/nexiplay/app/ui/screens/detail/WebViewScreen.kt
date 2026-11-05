@@ -152,12 +152,17 @@ private fun startSystemDownload(context: Context, downloadUrl: String, fileName:
         }
 
         val cookie = CookieManager.getInstance().getCookie(downloadUrl)
+        val refererHeader = when {
+            downloadUrl.contains("workers.dev", ignoreCase = true) || downloadUrl.contains("vidvault", ignoreCase = true) -> "https://vidvault.to/"
+            downloadUrl.contains("razorshell.space", ignoreCase = true) -> "https://argon.razorshell.space/"
+            else -> downloadUrl
+        }
         val request = DownloadManager.Request(Uri.parse(downloadUrl)).apply {
             setTitle(title)
             setDescription("Downloading via NexiPlay")
             addRequestHeader("Cookie", cookie ?: "")
             addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
-            addRequestHeader("Referer", downloadUrl)
+            addRequestHeader("Referer", refererHeader)
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "NexiPlay/$safeFileName")
             setAllowedOverMetered(true)
@@ -172,7 +177,7 @@ private fun startSystemDownload(context: Context, downloadUrl: String, fileName:
         Toast.makeText(context, "⬇ Download started: $title", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "❌ Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Download failed. Check your connection and available storage."), Toast.LENGTH_LONG).show()
     }
 }
 
@@ -279,7 +284,7 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(activeUrl))
                             context.startActivity(browserIntent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Cannot open browser: ${e.message}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't open the link. Please try again."), Toast.LENGTH_SHORT).show()
                         }
                     }) {
                         Icon(Icons.Default.OpenInBrowser, "Open in Chrome", tint = themeTextPrimary())
@@ -466,7 +471,16 @@ fun WebViewScreen(navController: NavController, encodedUrl: String) {
                             downloadWithPermission(dlUrl, fileName)
                         }
 
-                        loadUrl(initialUrl)
+                        val initialHeaders = when {
+                            initialUrl.contains("razorshell.space", ignoreCase = true) -> mapOf("Referer" to "https://codedew.com/")
+                            initialUrl.contains("workers.dev", ignoreCase = true) -> mapOf("Referer" to "https://vidvault.to/")
+                            else -> emptyMap()
+                        }
+                        if (initialHeaders.isNotEmpty()) {
+                            loadUrl(initialUrl, initialHeaders)
+                        } else {
+                            loadUrl(initialUrl)
+                        }
                         webViewRef.value = this
                     }
                 },

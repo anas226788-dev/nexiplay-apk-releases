@@ -105,7 +105,7 @@ class CoinViewModel : ViewModel() {
                                 .select { filter { eq("id", uid) } }
                                 .decodeSingleOrNull<UserProfile>()
                         } catch (e: Exception) {
-                            profileErrorMsg = "Failed to insert profile: ${e.message}"
+                            profileErrorMsg = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't prepare your coin profile.")
                             android.util.Log.e("CoinViewModel", profileErrorMsg!!)
                         }
                     } else if (profile.referralCode == null) {
@@ -119,12 +119,12 @@ class CoinViewModel : ViewModel() {
                             }
                             profile = profile.copy(referralCode = newCode)
                         } catch (e: Exception) {
-                            profileErrorMsg = "Failed to update referral code: ${e.message}"
+                            profileErrorMsg = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't update your referral code.")
                             android.util.Log.e("CoinViewModel", profileErrorMsg!!)
                         }
                     }
                 } catch (e: Exception) { 
-                    profileErrorMsg = "Failed to fetch profile: ${e.message}"
+                    profileErrorMsg = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load your coin profile.")
                     android.util.Log.e("CoinViewModel", "Failed to fetch profile: ${e.stackTraceToString()}")
                 }
 
@@ -148,7 +148,7 @@ class CoinViewModel : ViewModel() {
                 _state.value = _state.value.copy(
                     isLoading = false,
                     claimStatus = ClaimStatus.ERROR,
-                    claimMessage = e.message
+                    claimMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load your coin balance. Please try again.")
                 )
                 android.util.Log.e("CoinViewModel", "Critical error in loadData: ${e.stackTraceToString()}")
             }
@@ -270,7 +270,7 @@ class CoinViewModel : ViewModel() {
                 delay(300)
                 loadData()
             } catch (e: Exception) {
-                android.widget.Toast.makeText(context, "Failed to claim milestone: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't claim this reward. Please try again."), android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -441,7 +441,7 @@ class CoinViewModel : ViewModel() {
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     claimStatus = ClaimStatus.ERROR,
-                    claimMessage = e.message ?: "Claim failed",
+                    claimMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't claim your reward. Please try again."),
                 )
             }
         }
@@ -453,16 +453,27 @@ class CoinViewModel : ViewModel() {
             try {
                 val finalAmount = if (isBoostActive(context)) amount * 2 else amount
                 // ── 1. Upsert coin_balances ──
-                val currentBal = _state.value.balance?.balance ?: 0
-                val currentEarned = _state.value.balance?.totalEarned ?: 0
-                val currentSpent = _state.value.balance?.totalSpent ?: 0
+                val existingBal = _state.value.balance
+                val currentBal = existingBal?.balance ?: 0
+                val currentEarned = existingBal?.totalEarned ?: 0
+                val currentSpent = existingBal?.totalSpent ?: 0
 
-                val balanceJson = buildJsonObject {
-                    put("balance", JsonPrimitive(currentBal + finalAmount))
-                    put("total_earned", JsonPrimitive(currentEarned + finalAmount))
-                    put("total_spent", JsonPrimitive(currentSpent))
+                if (existingBal == null) {
+                    val insertJson = buildJsonObject {
+                        put("user_id", JsonPrimitive(uid))
+                        put("balance", JsonPrimitive(finalAmount))
+                        put("total_earned", JsonPrimitive(finalAmount))
+                        put("total_spent", JsonPrimitive(0))
+                    }
+                    SupabaseClient.main.from("coin_balances").insert(insertJson)
+                } else {
+                    val balanceJson = buildJsonObject {
+                        put("balance", JsonPrimitive(currentBal + finalAmount))
+                        put("total_earned", JsonPrimitive(currentEarned + finalAmount))
+                        put("total_spent", JsonPrimitive(currentSpent))
+                    }
+                    SupabaseClient.main.from("coin_balances").update(balanceJson) { filter { eq("user_id", uid) } }
                 }
-                SupabaseClient.main.from("coin_balances").update(balanceJson) { filter { eq("user_id", uid) } }
 
                 // ── 2. Insert coin_transaction ──
                 val txJson = buildJsonObject {
@@ -512,11 +523,8 @@ class CoinViewModel : ViewModel() {
             
             Result.success("Success! You received 5 coins, and your friend received 50 coins.")
         } catch (e: Exception) {
-            val errorMsg = e.message ?: "Something went wrong"
-            if (errorMsg.contains("invalid_code")) return Result.failure(Exception("Invalid referral code!"))
-            if (errorMsg.contains("own_code")) return Result.failure(Exception("You cannot use your own code!"))
-            if (errorMsg.contains("already_redeemed")) return Result.failure(Exception("You have already redeemed a code!"))
-            Result.failure(Exception("Failed to redeem. $errorMsg"))
+            val errorMsg = com.nexiplay.app.ui.util.UserFacingError.from(e, "Something went wrong. Please try again.")
+            Result.failure(IllegalStateException(errorMsg))
         }
     }
 
@@ -538,7 +546,7 @@ class CoinViewModel : ViewModel() {
             
             Result.success("Message sent successfully!")
         } catch (e: Exception) {
-            Result.failure(Exception("Failed: ${e.message}"))
+            Result.failure(IllegalStateException(com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't send your message. Please try again.")))
         }
     }
 
@@ -590,7 +598,7 @@ class CoinViewModel : ViewModel() {
                     adFreeExpiry = newExpiry
                 )
             } catch (e: Exception) {
-                android.widget.Toast.makeText(context, "Purchase failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Purchase failed. Please try again."), android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -634,6 +642,7 @@ class CoinViewModel : ViewModel() {
                 SupabaseClient.main.from("profiles").update(profileJson) { filter { eq("id", uid) } }
                 
                 com.nexiplay.app.data.util.AdManager.userBadgeType = tier
+                com.nexiplay.app.data.util.AdManager.badgeExpiresAt = newExpiry
                 com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(context, newExpiry)
 
                 // Reload local state
@@ -645,7 +654,7 @@ class CoinViewModel : ViewModel() {
                     purchaseSuccessMessage = "$title unlocked for $days days! Your profile is now glowing!"
                 )
             } catch (e: Exception) {
-                android.widget.Toast.makeText(context, "Purchase failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Purchase failed. Please try again."), android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -717,7 +726,7 @@ class CoinViewModel : ViewModel() {
                     purchaseSuccessMessage = "Double Coin Boost activated! You will earn 2x coins for the next 24 hours."
                 )
             } catch (e: Exception) {
-                android.widget.Toast.makeText(context, "Purchase failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Purchase failed. Please try again."), android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

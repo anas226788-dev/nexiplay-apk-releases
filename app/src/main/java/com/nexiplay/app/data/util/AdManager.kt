@@ -3,6 +3,7 @@ package com.nexiplay.app.data.util
 import android.app.Activity
 import android.content.Context
 import android.view.View
+import com.nexiplay.app.util.findActivity
 import com.startapp.sdk.adsbase.StartAppAd
 import com.startapp.sdk.adsbase.StartAppSDK
 import com.startapp.sdk.adsbase.adlisteners.AdEventListener
@@ -210,6 +211,9 @@ object AdManager {
         if (appId.isNotEmpty()) {
             StartAppSDK.init(context, appId, false)
             StartAppSDK.setTestAdsEnabled(isTestAdsEnabled)
+            if (!isAppOpenEnabled) {
+                StartAppAd.disableSplash()
+            }
             android.util.Log.d("AdManager", "✅ Start.io initialized with appId=$appId, testAds=$isTestAdsEnabled")
         }
     }
@@ -275,7 +279,7 @@ object AdManager {
                     appEnabledServers = it.appEnabledServers
 
                     if (!isAppOpenEnabled) {
-                        StartAppAd.disableSplash()
+                        try { StartAppAd.disableSplash() } catch (_: Exception) {}
                     }
 
                     isConfigLoaded = true
@@ -320,7 +324,7 @@ object AdManager {
         onRewarded: () -> Unit,
         onFailed: (String) -> Unit
     ) {
-        val activity = context as? Activity
+        val activity = context.findActivity()
         if (activity == null || !isRewardedEnabled) {
             onFailed("Ads are disabled or activity not found")
             return
@@ -417,10 +421,14 @@ object AdManager {
             override fun onAdClosed(adInfo: AdInfo?) {
                 android.util.Log.d("AdManager", "🚪 Unity rewarded ad closed, wasRewarded=$wasRewarded")
                 handler.removeCallbacks(timeoutRunnable)
+                IronSource.loadRewardedVideo()
                 if (!hasTriggered) {
                     hasTriggered = true
-                    // Give reward once ad finishes
-                    onRewarded()
+                    if (wasRewarded) {
+                        onRewarded()
+                    } else {
+                        onFailed("Please watch the full ad to earn the reward.")
+                    }
                 }
             }
             override fun onAdAvailable(adInfo: AdInfo?) {
@@ -499,7 +507,7 @@ object AdManager {
             onClosed()
             return
         }
-        val activity = context as? Activity
+        val activity = context.findActivity()
         if (activity == null) {
             onClosed()
             return
@@ -539,13 +547,17 @@ object AdManager {
         }
         initUnityLevelPlay(activity, unityAppKey)
 
+        val showInterstitial = {
+            if (unityInterstitialId.isNotEmpty()) {
+                IronSource.showInterstitial(unityInterstitialId)
+            } else {
+                IronSource.showInterstitial()
+            }
+        }
+
         IronSource.setLevelPlayInterstitialListener(object : LevelPlayInterstitialListener {
             override fun onAdReady(adInfo: AdInfo?) {
-                if (unityInterstitialId.isNotEmpty()) {
-                    IronSource.showInterstitial(unityInterstitialId)
-                } else {
-                    IronSource.showInterstitial()
-                }
+                showInterstitial()
             }
             override fun onAdLoadFailed(error: IronSourceError?) {
                 onFailed?.invoke() ?: onClosed()
@@ -557,16 +569,25 @@ object AdManager {
             }
             override fun onAdClicked(adInfo: AdInfo?) {}
             override fun onAdClosed(adInfo: AdInfo?) {
+                IronSource.loadInterstitial()
                 onClosed()
             }
         })
-        IronSource.loadInterstitial()
+        if (IronSource.isInterstitialReady()) {
+            showInterstitial()
+        } else {
+            IronSource.loadInterstitial()
+        }
     }
 
     private fun loadAndShowStartIoInterstitial(
         activity: Activity,
         onClosed: () -> Unit
     ) {
+        if (startioAppId.isEmpty()) {
+            onClosed()
+            return
+        }
         val startAppAd = StartAppAd(activity)
         startAppAd.loadAd(StartAppAd.AdMode.AUTOMATIC, object : AdEventListener {
             override fun onReceiveAd(ad: com.startapp.sdk.adsbase.Ad) {
@@ -585,7 +606,7 @@ object AdManager {
 
     fun getBannerAdView(context: Context): View? {
         if (!isBannerEnabled || isUserPremium()) return null
-        val activity = context as? Activity
+        val activity = context.findActivity()
         if (activity != null && unityAppKey.isNotEmpty()) {
             initUnityLevelPlay(activity, unityAppKey)
         }
@@ -634,7 +655,7 @@ object AdManager {
             onClosed()
             return
         }
-        val activity = context as? Activity
+        val activity = context.findActivity()
         if (activity == null) {
             onClosed()
             return
@@ -642,6 +663,10 @@ object AdManager {
         
         when (currentNetwork) {
             AdNetwork.STARTIO -> {
+                if (startioAppId.isEmpty()) {
+                    onClosed()
+                    return
+                }
                 val startAppAd = StartAppAd(activity)
                 startAppAd.loadAd(StartAppAd.AdMode.AUTOMATIC, object : AdEventListener {
                     override fun onReceiveAd(ad: com.startapp.sdk.adsbase.Ad) {

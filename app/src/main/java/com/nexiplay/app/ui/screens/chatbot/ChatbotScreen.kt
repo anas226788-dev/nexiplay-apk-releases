@@ -180,7 +180,7 @@ fun ChatbotScreen(
                 }
             }
         },
-        containerColor = Color(0xFF0F0F1A)
+        containerColor = DarkBg
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -220,7 +220,7 @@ fun ChatbotScreen(
             // ── Input Area ──
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFF161626),
+                color = DarkSurface,
                 tonalElevation = 8.dp,
                 shadowElevation = 8.dp
             ) {
@@ -233,7 +233,7 @@ fun ChatbotScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0F0F1A), RoundedCornerShape(16.dp))
+                            .background(DarkBg, RoundedCornerShape(16.dp))
                             .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -315,7 +315,7 @@ fun ChatbotScreen(
     if (showDeleteConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
-            containerColor = Color(0xFF1E1E2E),
+            containerColor = DarkSurface2,
             title = { Text("Clear Chat History", color = Color.White, fontWeight = FontWeight.Bold) },
             text = { Text("Are you sure you want to delete your chat history?", color = Color.White.copy(alpha = 0.8f)) },
             confirmButton = {
@@ -362,7 +362,7 @@ private fun ChatMessageItem(
                         )
                     )
                     .background(
-                        if (message.isBot) Color(0xFF1C1C2D) else NexiRed
+                        if (message.isBot) DarkSurface2 else NexiRed
                     )
                     .border(
                         width = 1.dp,
@@ -693,7 +693,7 @@ private fun ChatStepsIndicator(steps: List<ChatStreamStep>) {
     Box(
         modifier = Modifier
             .fillMaxWidth(0.85f)
-            .background(Color(0xFF1C1C2D), RoundedCornerShape(16.dp))
+            .background(DarkSurface2, RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
             .padding(12.dp)
     ) {

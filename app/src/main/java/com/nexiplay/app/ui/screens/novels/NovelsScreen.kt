@@ -34,14 +34,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.size.Precision
-import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Novel
 import com.nexiplay.app.ui.components.bounceClick
+import com.nexiplay.app.ui.components.SolidGlassSurface
 import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
 import io.github.jan.supabase.postgrest.from
@@ -101,7 +98,7 @@ fun NovelsScreen(navController: NavController) {
                 }
                 currentPage = targetPage
             } catch (e: Exception) {
-                errorMessage = e.localizedMessage ?: "Failed to load novels. Please check your connection."
+                errorMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load novels. Please check your connection and try again.")
             }
             loading = false
             try {
@@ -349,8 +346,8 @@ fun NovelsScreen(navController: NavController) {
                     // Page indicator pill
                     Box(
                         modifier = Modifier
-                            .background(themeSurface(), RoundedCornerShape(8.dp))
-                            .border(1.dp, themeTextTertiary().copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                            .background(DarkSurface, RoundedCornerShape(8.dp))
+                            .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -407,24 +404,16 @@ private fun NovelCard(novel: Novel, onClick: () -> Unit) {
             .bounceClick(onClick = onClick)
             .fillMaxWidth()
     ) {
-        Box(
+        SolidGlassSurface(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.68f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(themeCard())
-                .border(1.dp, themeTextTertiary().copy(alpha = 0.15f), RoundedCornerShape(14.dp))
+                .aspectRatio(0.68f),
+            shape = RoundedCornerShape(14.dp),
+            backgroundColor = DarkSurface,
+            borderColor = DarkBorder
         ) {
-            val context = LocalContext.current
-            val coverRequest = remember(novel.coverUrl) {
-                ImageRequest.Builder(context)
-                    .data(novel.coverUrl)
-                    .size(Size(280, 410))
-                    .precision(Precision.INEXACT)
-                    .build()
-            }
             AsyncImage(
-                model = coverRequest,
+                model = novel.coverUrl,
                 contentDescription = novel.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

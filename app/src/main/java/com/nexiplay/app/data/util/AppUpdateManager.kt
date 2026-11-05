@@ -271,15 +271,15 @@ object AppUpdateManager {
                     e.message?.contains("timeout", ignoreCase = true) == true ->
                         "Connection timed out. Please check your internet and try again."
                     e.message?.contains("HTML", ignoreCase = true) == true ->
-                        e.message ?: "Invalid download URL"
+                        "The update link is unavailable. Please try again later."
                     e.message?.contains("HTTP", ignoreCase = true) == true ->
-                        e.message ?: "Server error"
+                        "The update server couldn't be reached. Please try again later."
                     e.message?.contains("Unable to resolve host", ignoreCase = true) == true ->
                         "No internet connection. Please check your network."
                     e.message?.contains("corrupted", ignoreCase = true) == true ->
                         "Download was incomplete. Please try again."
                     else ->
-                        "Download failed: ${e.localizedMessage ?: "Unknown error"}"
+                        "Update download failed. Check your connection and available storage, then try again."
                 }
                 _errorMessage.value = userMessage
                 _downloadProgress.value = -1f
@@ -401,7 +401,7 @@ object AppUpdateManager {
             context.startActivity(intent)
         } catch (e: Exception) {
             e.printStackTrace()
-            _errorMessage.value = "Failed to open installer: ${e.localizedMessage}"
+            _errorMessage.value = "Couldn't open the installer. Check that installs from this source are allowed, then try again."
             _updateState.value = UpdateState.ERROR
         }
     }

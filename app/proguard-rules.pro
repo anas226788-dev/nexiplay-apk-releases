@@ -8,17 +8,9 @@
 -keep class io.ktor.** { *; }
 -dontwarn io.ktor.**
 
-# Kotlin Serialization & Models
+# Kotlin Serialization
 -keepclassmembers class com.nexiplay.app.data.model.** { *; }
 -keep class com.nexiplay.app.data.model.** { *; }
--keepclassmembers class com.nexiplay.app.data.models.** { *; }
--keep class com.nexiplay.app.data.models.** { *; }
--keep class kotlinx.serialization.** { *; }
-
-# OkHttp & Coroutines
--keep class okhttp3.** { *; }
--dontwarn okhttp3.**
--keep class kotlinx.coroutines.** { *; }
 
 # Firebase
 -keep class com.google.firebase.** { *; }

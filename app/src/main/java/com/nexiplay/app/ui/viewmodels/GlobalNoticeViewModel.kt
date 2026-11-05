@@ -6,6 +6,7 @@ import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Notice
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -22,7 +23,7 @@ class GlobalNoticeViewModel : ViewModel() {
     }
 
     fun fetchNotices() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val fetchedNotices = SupabaseClient.main.from("notices").select {
                     filter {

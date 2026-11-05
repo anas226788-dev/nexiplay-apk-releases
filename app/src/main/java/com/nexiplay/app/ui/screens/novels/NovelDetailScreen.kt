@@ -78,7 +78,7 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                         .decodeList<NovelChapter>()
                 }
             } catch (e: Exception) {
-                errorMessage = e.localizedMessage ?: "Failed to load novel details"
+                errorMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load this novel. Please try again.")
             }
             loading = false
         }
@@ -172,7 +172,7 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                 if (n.status != null) {
                     Box(
                         Modifier.background(
-                            if (n.status == "Ongoing") SuccessGreen else Color(0xFFE50914),
+                            if (n.status == "Ongoing") SuccessGreen else TextGray,
                             RoundedCornerShape(6.dp)
                         ).padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {

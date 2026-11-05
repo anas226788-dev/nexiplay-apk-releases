@@ -32,6 +32,8 @@ object SessionTracker {
     fun startSession() {
         if (sessionJob?.isActive == true) return
         sessionStartTime = System.currentTimeMillis()
+        sessionId = java.util.UUID.randomUUID().toString()
+        val activeSessionId = sessionId
         
         sessionJob = CoroutineScope(Dispatchers.IO).launch {
             var user = SupabaseClient.main.auth.currentUserOrNull()
@@ -44,7 +46,7 @@ object SessionTracker {
             try {
                 SupabaseClient.main.from("user_sessions").insert(
                     UserSession(
-                        session_id = sessionId,
+                        session_id = activeSessionId,
                         user_id = user.id,
                         device_type = "android_app",
                         duration_seconds = 0
@@ -63,6 +65,7 @@ object SessionTracker {
             // Periodic update
             while(true) {
                 delay(60000) // update every minute
+                val currentUser = SupabaseClient.main.auth.currentUserOrNull() ?: break
                 val currentDuration = ((System.currentTimeMillis() - sessionStartTime) / 1000).toInt()
                 try {
                     SupabaseClient.main.from("user_sessions").update(
@@ -71,14 +74,14 @@ object SessionTracker {
                             put("last_seen_at", Clock.System.now().toString())
                         }
                     ) {
-                        filter { eq("session_id", sessionId) }
+                        filter { eq("session_id", activeSessionId) }
                     }
                     
                     // Update profile's last_seen_at to show as Online
                     SupabaseClient.main.from("profiles").update(
                         mapOf("last_seen_at" to Clock.System.now().toString())
                     ) {
-                        filter { eq("id", user.id) }
+                        filter { eq("id", currentUser.id) }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()

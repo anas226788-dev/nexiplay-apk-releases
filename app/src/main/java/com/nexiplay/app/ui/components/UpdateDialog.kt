@@ -57,16 +57,17 @@ fun UpdateDialog(
 
     val isWorking = isDownloading || updateState == AppUpdateManager.UpdateState.INSTALLING
     val hasError = updateState == AppUpdateManager.UpdateState.ERROR
+    val isForceUpdate = AppUpdateManager.isForceUpdate
 
     Dialog(
         onDismissRequest = {
-            if (!updateInfo.forceUpdate && !isWorking) {
+            if (!isForceUpdate && !isWorking) {
                 onDismiss()
             }
         },
         properties = DialogProperties(
-            dismissOnBackPress = !updateInfo.forceUpdate && !isWorking,
-            dismissOnClickOutside = !updateInfo.forceUpdate && !isWorking,
+            dismissOnBackPress = !isForceUpdate && !isWorking,
+            dismissOnClickOutside = !isForceUpdate && !isWorking,
             usePlatformDefaultWidth = false
         )
     ) {
@@ -99,7 +100,7 @@ fun UpdateDialog(
                     Icon(
                         imageVector = when {
                             hasError -> Icons.Default.ErrorOutline
-                            updateInfo.forceUpdate -> Icons.Default.NewReleases
+                            isForceUpdate -> Icons.Default.NewReleases
                             else -> Icons.Default.CloudDownload
                         },
                         contentDescription = null,
@@ -114,7 +115,7 @@ fun UpdateDialog(
                 Text(
                     text = when {
                         hasError -> "Update Failed"
-                        updateInfo.forceUpdate -> "Update Required"
+                        isForceUpdate -> "Update Required"
                         else -> "New Update Available"
                     },
                     fontSize = 22.sp,
@@ -312,7 +313,7 @@ fun UpdateDialog(
                     }
 
                     // Maybe Later (only for non-force updates)
-                    if (!updateInfo.forceUpdate) {
+                    if (!isForceUpdate) {
                         Spacer(Modifier.height(8.dp))
                         TextButton(onClick = onDismiss) {
                             Text(
@@ -326,7 +327,7 @@ fun UpdateDialog(
                     }
 
                     // Force update warning
-                    if (updateInfo.forceUpdate && !hasError) {
+                    if (isForceUpdate && !hasError) {
                         Spacer(Modifier.height(10.dp))
                         Text(
                             "This update is required to continue using the app.",

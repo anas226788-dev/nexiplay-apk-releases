@@ -88,20 +88,30 @@ object CoinRewardHelper {
                 val boostExpiry = shopPrefs.getLong("boost_expiry", 0)
                 val finalAmount = if (System.currentTimeMillis() < boostExpiry) amount * 2 else amount
 
-                // 1. Update balance
+                // 1. Update or insert balance
                 val balance = try {
                     SupabaseClient.main.from("coin_balances")
                         .select { filter { eq("user_id", uid) } }
-                        .decodeSingle<com.nexiplay.app.data.model.CoinBalance>()
-                } catch (_: Exception) { return@launch }
+                        .decodeSingleOrNull<com.nexiplay.app.data.model.CoinBalance>()
+                } catch (_: Exception) { null }
 
-                val balanceJson = buildJsonObject {
-                    put("balance", JsonPrimitive(balance.balance + finalAmount))
-                    put("total_earned", JsonPrimitive(balance.totalEarned + finalAmount))
-                    put("total_spent", JsonPrimitive(balance.totalSpent))
-                }
-                SupabaseClient.main.from("coin_balances").update(balanceJson) {
-                    filter { eq("user_id", uid) }
+                if (balance == null) {
+                    val insertJson = buildJsonObject {
+                        put("user_id", JsonPrimitive(uid))
+                        put("balance", JsonPrimitive(finalAmount))
+                        put("total_earned", JsonPrimitive(finalAmount))
+                        put("total_spent", JsonPrimitive(0))
+                    }
+                    SupabaseClient.main.from("coin_balances").insert(insertJson)
+                } else {
+                    val balanceJson = buildJsonObject {
+                        put("balance", JsonPrimitive(balance.balance + finalAmount))
+                        put("total_earned", JsonPrimitive(balance.totalEarned + finalAmount))
+                        put("total_spent", JsonPrimitive(balance.totalSpent))
+                    }
+                    SupabaseClient.main.from("coin_balances").update(balanceJson) {
+                        filter { eq("user_id", uid) }
+                    }
                 }
 
                 // 2. Insert transaction

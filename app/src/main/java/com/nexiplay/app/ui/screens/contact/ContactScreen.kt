@@ -33,6 +33,17 @@ fun ContactScreen(navController: NavController, vm: CoinViewModel = viewModel())
     var email by remember { mutableStateOf(state.userProfile?.email ?: "") }
     var subject by remember { mutableStateOf("Bug Report") }
     var message by remember { mutableStateOf("") }
+
+    LaunchedEffect(state.userProfile) {
+        state.userProfile?.let { profile ->
+            if (name.isBlank() && !profile.displayName.isNullOrBlank()) {
+                name = profile.displayName
+            }
+            if (email.isBlank() && !profile.email.isNullOrBlank()) {
+                email = profile.email
+            }
+        }
+    }
     
     var expanded by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
@@ -158,7 +169,7 @@ fun ContactScreen(navController: NavController, vm: CoinViewModel = viewModel())
                             Toast.makeText(context, result.getOrNull(), Toast.LENGTH_LONG).show()
                             navController.popBackStack()
                         } else {
-                            Toast.makeText(context, result.exceptionOrNull()?.message ?: "Failed", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, result.exceptionOrNull()?.let { com.nexiplay.app.ui.util.UserFacingError.from(it, "Couldn't send your message. Please try again.") } ?: "Couldn't send your message. Please try again.", Toast.LENGTH_LONG).show()
                         }
                     }
                 },

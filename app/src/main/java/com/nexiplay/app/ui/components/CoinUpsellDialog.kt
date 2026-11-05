@@ -57,8 +57,8 @@ fun CoinUpsellDialog(
                     width = 1.5.dp,
                     brush = Brush.linearGradient(
                         listOf(
-                            Color(0xFFFFD700).copy(alpha = glowAlpha),
-                            Color(0xFFA855F7).copy(alpha = glowAlpha),
+                            Color(0xFFFFB878).copy(alpha = glowAlpha),
+                            Color(0xFF9273F5).copy(alpha = glowAlpha),
                             Color(0xFF00F2FE).copy(alpha = glowAlpha)
                         )
                     ),
@@ -91,7 +91,7 @@ fun CoinUpsellDialog(
                         .clip(CircleShape)
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFFFFD700), Color(0xFFFFA500))
+                                listOf(Color(0xFFFFB878), Color(0xFFFFA500))
                             )
                         ),
                     contentAlignment = Alignment.Center
@@ -152,7 +152,7 @@ fun CoinUpsellDialog(
                             .fillMaxSize()
                             .background(
                                 Brush.horizontalGradient(
-                                    listOf(Color(0xFFFFD700), Color(0xFFFFA500))
+                                    listOf(Color(0xFFFFB878), Color(0xFFFFA500))
                                 ),
                                 RoundedCornerShape(14.dp)
                             ),

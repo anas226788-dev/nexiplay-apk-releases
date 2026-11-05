@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,6 +8,15 @@ plugins {
     id("com.google.gms.google-services")
     id("com.onesignal.androidsdk.onesignal-gradle-plugin")
 }
+
+val appLocalProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) localPropertiesFile.inputStream().use { load(it) }
+}
+val googleWebClientId = providers.gradleProperty("GOOGLE_WEB_CLIENT_ID")
+    .orElse(providers.environmentVariable("GOOGLE_WEB_CLIENT_ID"))
+    .orElse(appLocalProperties.getProperty("GOOGLE_WEB_CLIENT_ID", ""))
+    .get()
 
 android {
     namespace = "com.nexiplay.app"
@@ -23,6 +34,7 @@ android {
         // Supabase config - these will be read from local.properties or BuildConfig
         buildConfigField("String", "SUPABASE_URL", "\"https://ttgpplyunomwtqbgsupw.supabase.co\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z3BwbHl1bm9td3RxYmdzdXB3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3MjA5MTQsImV4cCI6MjA5MTI5NjkxNH0.8EVuBI_pN0dfpMFamh0szRqONSmDfWm4BNY5MGxL02g\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
         buildConfigField("String", "SUPABASE_NOVELS_URL", "\"https://lnpkqcvqsppaiafjtzpt.supabase.co\"")
         buildConfigField("String", "SUPABASE_NOVELS_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxucGtxY3Zxc3BwYWlhZmp0enB0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3MjE0NjEsImV4cCI6MjA5MTI5NzQ2MX0.KjxXOCBnS5vQ7bt8_7tFIAC3dnbN7KCZjmF9qFI-YmE\"")
     }
@@ -62,6 +74,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
 
     buildFeatures {
@@ -77,6 +90,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     // ── Jetpack Compose ──
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))

@@ -22,11 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.size.Precision
-import coil3.size.Size
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.ui.navigation.Screen
@@ -57,12 +53,23 @@ fun WatchlistScreen(navController: NavController) {
             errorMessage = null
             scope.launch {
                 try {
-                    val entries = SupabaseClient.main.from("watchlist")
-                        .select { filter { eq("user_id", user.id) } }
-                        .decodeList<WatchlistEntry>()
+                    val userWlEntries = try {
+                        SupabaseClient.main.from("user_watchlist")
+                            .select { filter { eq("user_id", user.id) } }
+                            .decodeList<WatchlistEntry>()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                    val appWlEntries = try {
+                        SupabaseClient.main.from("watchlist")
+                            .select { filter { eq("user_id", user.id) } }
+                            .decodeList<WatchlistEntry>()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
 
-                    if (entries.isNotEmpty()) {
-                        val movieIds = entries.map { it.movieId }
+                    val movieIds = (userWlEntries.map { it.movieId } + appWlEntries.map { it.movieId }).distinct()
+                    if (movieIds.isNotEmpty()) {
                         movies = SupabaseClient.main.from("movies")
                             .select { filter { isIn("id", movieIds) } }
                             .decodeList<Movie>()
@@ -71,8 +78,8 @@ fun WatchlistScreen(navController: NavController) {
                     }
                 } catch (e: Exception) {
                     movies = emptyList()
+                    errorMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't load your watchlist. Please try again.")
                 }
-                errorMessage = null
                 loading = false
             }
         } else {
@@ -137,21 +144,13 @@ fun WatchlistScreen(navController: NavController) {
 
 @Composable
 private fun MovieCardGrid(movie: Movie, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val posterRequest = remember(movie.posterUrl) {
-        ImageRequest.Builder(context)
-            .data(movie.posterUrl)
-            .size(Size(280, 410))
-            .precision(Precision.INEXACT)
-            .build()
-    }
     Column(
         modifier = Modifier
             .clickable(onClick = onClick)
             .fillMaxWidth()
     ) {
         AsyncImage(
-            model = posterRequest,
+            model = movie.posterUrl,
             contentDescription = movie.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier

@@ -39,13 +39,21 @@ import androidx.navigation.NavController
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.ui.components.MovieCardGrid
+import com.nexiplay.app.ui.components.ClayIconButton
 import com.nexiplay.app.ui.components.ShimmerBox
 import com.nexiplay.app.ui.components.bounceClick
+import com.nexiplay.app.data.repository.TmdbRepository
 import com.nexiplay.app.ui.navigation.Screen
 import com.nexiplay.app.ui.theme.*
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SearchScreen(navController: NavController) {
@@ -58,26 +66,82 @@ fun SearchScreen(navController: NavController) {
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 
-    fun doSearch() {
-        if (query.isBlank()) return
-        scope.launch {
-            loading = true; searched = true
-            errorMessage = null
+    var hideNsfw by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        withContext(Dispatchers.IO) {
             try {
-                results = SupabaseClient.main.from("movies").select(Columns.raw("id, title, slug, poster_url, type, release_year, is_adult, created_at")) {
-                    filter { ilike("title", "%${query.trim()}%") }
-                    order("created_at", io.github.jan.supabase.postgrest.query.Order.DESCENDING)
-                    limit(30)
-                }.decodeList<Movie>()
-            } catch (e: Exception) {
-                errorMessage = e.localizedMessage ?: "Failed to search"
-            }
-            loading = false
-            focusManager.clearFocus()
+                val uid = SupabaseClient.main.auth.currentUserOrNull()?.id
+                if (uid != null) {
+                    val p = SupabaseClient.main.from("profiles")
+                        .select(Columns.list("hide_nsfw")) { filter { eq("id", uid) } }
+                        .decodeSingleOrNull<com.nexiplay.app.data.model.UserProfile>()
+                    hideNsfw = p?.hideNsfw ?: false
+                }
+            } catch (_: Exception) {}
         }
     }
 
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    suspend fun runSearchInternal(cleanQuery: String) {
+        loading = true
+        searched = true
+        errorMessage = null
+        try {
+            val filtered = withContext(Dispatchers.IO) {
+                val combined = coroutineScope {
+                    val localDef = async {
+                        runCatching {
+                            SupabaseClient.main.from("movies").select(
+                                Columns.raw("id, title, slug, poster_url, type, release_year, is_adult, admin_note, tmdb_id, created_at")
+                            ) {
+                                filter { ilike("title", "%$cleanQuery%") }
+                                order("created_at", io.github.jan.supabase.postgrest.query.Order.DESCENDING)
+                                limit(30)
+                            }.decodeList<Movie>()
+                        }.getOrDefault(emptyList())
+                    }
+                    val tmdbDef = async {
+                        runCatching {
+                            TmdbRepository.searchTmdb(cleanQuery)
+                        }.getOrDefault(emptyList())
+                    }
+                    val localList = localDef.await()
+                    val tmdbList = TmdbRepository.deduplicateAgainstLocal(tmdbDef.await(), localList)
+                    localList + tmdbList
+                }
+                if (hideNsfw) combined.filter { it.isAdult != true } else combined
+            }
+            results = filtered
+        } catch (e: Exception) {
+            errorMessage = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't complete your search. Please try again.")
+        }
+        loading = false
+    }
+
+    // Debounced live search so results appear smoothly while typing without blocking the UI thread
+    LaunchedEffect(query) {
+        val clean = query.trim()
+        if (clean.length < 2) {
+            if (clean.isEmpty()) {
+                results = emptyList()
+                searched = false
+                loading = false
+            }
+            return@LaunchedEffect
+        }
+        delay(350)
+        runSearchInternal(clean)
+    }
+
+    fun doSearch() {
+        val clean = query.trim()
+        if (clean.isBlank()) return
+        focusManager.clearFocus()
+        scope.launch {
+            runSearchInternal(clean)
+        }
+    }
 
     // ── Track focus state for animated border ──
     var isFocused by remember { mutableStateOf(false) }
@@ -105,9 +169,12 @@ fun SearchScreen(navController: NavController) {
                 .padding(horizontal = 8.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
-                Icon(Icons.Default.ArrowBack, "Back", tint = themeTextPrimary())
-            }
+            ClayIconButton(
+                icon = Icons.Default.ArrowBack,
+                onClick = { navController.popBackStack() },
+                size = 42.dp,
+                contentDescription = "Back"
+            )
 
             Spacer(modifier = Modifier.width(4.dp))
 
@@ -116,7 +183,7 @@ fun SearchScreen(navController: NavController) {
                     .weight(1f)
                     .clip(RoundedCornerShape(14.dp))
                     .border(animatedBorderWidth, animatedBorderColor, RoundedCornerShape(14.dp))
-                    .background(themeSurface())
+                    .background(DarkInset)
             ) {
                 TextField(
                     value = query,

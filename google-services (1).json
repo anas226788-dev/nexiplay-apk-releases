@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "133365393840",
+    "project_id": "nexiplay-app-f97c1",
+    "storage_bucket": "nexiplay-app-f97c1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:133365393840:android:4c723e6a61e39df9264e75",
+        "android_client_info": {
+          "package_name": "com.nexiplay.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtpPFIzrmD9JEdPXOK1Uu3h_pJTpeBTRY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
