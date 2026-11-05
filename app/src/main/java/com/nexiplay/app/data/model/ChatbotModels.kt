@@ -21,6 +21,22 @@ data class ChatContentResult(
     @SerialName("poster_url") val posterUrl: String? = null
 )
 
+// ── Visual option from modern /api/chat ──
+@Serializable
+data class ChatVisualOption(
+    val id: String? = null,
+    val title: String,
+    val type: String = "movie",
+    @SerialName("release_year") val releaseYear: kotlinx.serialization.json.JsonElement? = null,
+    @SerialName("poster_url") val posterUrl: String? = null,
+    val overview: String? = null,
+    val slug: String? = null,
+    val available: Boolean = false,
+    @SerialName("watch_url") val watchUrl: String? = null,
+    @SerialName("tmdb_id") val tmdbId: kotlinx.serialization.json.JsonElement? = null,
+    val source: String? = null
+)
+
 // ── TMDB verification info ──
 @Serializable
 data class ChatTMDBInfo(
@@ -37,6 +53,10 @@ data class ChatApiResponse(
     val intent: String? = null,
     val found: Boolean? = null,
     val results: List<ChatContentResult>? = null,
+    @SerialName("visual_options") val visualOptions: List<ChatVisualOption>? = null,
+    @SerialName("search_title") val searchTitle: String? = null,
+    @SerialName("auto_requested") val autoRequested: Boolean? = null,
+    @SerialName("requested_title") val requestedTitle: String? = null,
     val requestSubmitted: Boolean? = null,
     val tmdbVerified: Boolean? = null,
     val tmdbInfo: ChatTMDBInfo? = null,

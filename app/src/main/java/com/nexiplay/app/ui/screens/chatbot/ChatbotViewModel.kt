@@ -69,43 +69,33 @@ class ChatbotViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                // Step 1: Thinking
-                addStep("thinking", "🧠 Analyzing your message...")
-                delay(900)
+                // Step 1: Thinking / Understanding message
+                addStep("thinking", "🧠 Understanding your message...")
 
                 // Build history for context
                 val history = getAIHistory()
 
-                // Step 2: Searching
-                addStep("searching_local", "🔍 Searching Nexiplay database...")
-
-                // Call API
+                // Call API first (same as website)
                 val response = ChatbotRepository.sendMessage(trimmed, history)
 
-                // Step 3: Show additional steps based on response
+                // Step 2: ONLY show catalog search step if intent is "search"
                 if (response.intent == "search") {
-                    if (response.found == true) {
-                        addStep("validating", "🧠 Verifying results match your query...")
-                        delay(500)
-                    } else {
-                        addStep("validating", "🧠 No exact match found in database...")
-                        delay(500)
-                        if (response.tmdbVerified != null) {
-                            addStep("verifying_online", "🌐 Verifying online...")
-                            delay(600)
-                        }
-                        if (response.requestSubmitted == true) {
-                            addStep("submitting", "📥 Submitting request to admin...")
-                            delay(600)
-                        }
-                        if (response.tmdbVerified == false) {
-                            addStep("not_verified", "❌ Could not verify this title")
-                            delay(400)
-                        }
+                    addStep("searching_local", "🔍 Searching Nexiplay catalog & database...")
+                    delay(400)
+
+                    val hasAvailable = response.visualOptions?.any { it.available } == true ||
+                            (response.found == true && !response.results.isNullOrEmpty())
+
+                    if (hasAvailable) {
+                        addStep("validating", "✓ Found title in Nexiplay!")
+                        delay(250)
+                    } else if (response.autoRequested == true || response.requestSubmitted == true) {
+                        addStep("submitting", "📥 Request auto-submitted to admin queue 🚀")
+                        delay(350)
                     }
                 }
 
-                delay(500)
+                // If intent is "chat", NO search steps are shown! Instant conversational reply.
 
                 // Process result
                 handleResult(response)
@@ -135,48 +125,45 @@ class ChatbotViewModel : ViewModel() {
             _state.value = _state.value.copy(activeAgent = data.agent)
         }
 
-        // Search with results found
-        if (data.intent == "search" && data.found == true && !data.results.isNullOrEmpty()) {
-            addBotMessage(
-                ChatMessage(
-                    text = "✅ Found on Nexiplay:",
-                    isBot = true,
-                    role = "assistant",
-                    agent = data.agent,
-                    contentResults = data.results
-                )
-            )
-            if (!data.reply.isNullOrBlank()) {
-                addBotMessage(
-                    ChatMessage(
-                        text = data.reply,
-                        isBot = true,
-                        role = "assistant",
-                        agent = data.agent
-                    )
-                )
+        // Map visual_options from modern /api/chat (or legacy results)
+        val availableCards: List<ChatContentResult> = data.visualOptions?.mapNotNull { opt ->
+            val cleanSlug = opt.slug?.takeIf { it.isNotBlank() }
+                ?: opt.title.lowercase().replace("[^a-z0-9]+".toRegex(), "-").trim('-')
+            val year = when (val ry = opt.releaseYear) {
+                is kotlinx.serialization.json.JsonPrimitive -> ry.content.toIntOrNull()
+                else -> null
             }
-        }
-        // Search not found
-        else if (data.intent == "search" && data.found != true) {
+            ChatContentResult(
+                title = opt.title,
+                slug = cleanSlug,
+                type = opt.type,
+                releaseYear = year,
+                posterUrl = opt.posterUrl
+            )
+        } ?: data.results ?: emptyList()
+
+        if (data.intent == "search") {
+            val mainReply = data.reply ?: if (availableCards.isNotEmpty()) {
+                "Here is what I found on Nexiplay:"
+            } else {
+                "Could not find this title on Nexiplay."
+            }
+
             addBotMessage(
                 ChatMessage(
-                    text = data.reply ?: "Content not found.",
+                    text = mainReply,
                     isBot = true,
                     role = "assistant",
                     agent = data.agent,
-                    tmdbVerified = data.tmdbVerified,
-                    tmdbInfo = data.tmdbInfo,
-                    requestSubmitted = data.requestSubmitted,
-                    isNotVerified = data.tmdbVerified == false
+                    contentResults = availableCards.takeIf { it.isNotEmpty() },
+                    requestSubmitted = data.autoRequested == true || data.requestSubmitted == true
                 )
             )
-        }
-        // General chat
-        else {
+        } else {
+            // Conversational chat reply (Greetings like "hi", small talk, recommendations, etc.)
             addBotMessage(
                 ChatMessage(
-                    text = data.reply ?: "I'm not sure how to respond to that.",
+                    text = data.reply ?: "Hi! How can I assist you today with movies, series, anime, or novels? 😊",
                     isBot = true,
                     role = "assistant",
                     agent = data.agent
