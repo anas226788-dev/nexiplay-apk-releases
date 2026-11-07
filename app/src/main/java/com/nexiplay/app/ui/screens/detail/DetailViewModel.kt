@@ -29,8 +29,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 @Serializable
 private data class MovieCategoryJoin(
@@ -259,16 +259,6 @@ class DetailViewModel : ViewModel() {
                             )
                         }
                     }
-                                statusText = tmdbBundle.status ?: "Released",
-                                tagline = tmdbBundle.tagline
-                            )
-                        } else {
-                            return@withContext DetailUiState(
-                                isLoading = false,
-                                error = "Content not found."
-                            )
-                        }
-                    }
 
                     val actualType = when (foundMovie.type.lowercase().trim()) {
                         "anime", "animes" -> "anime"
@@ -401,7 +391,7 @@ class DetailViewModel : ViewModel() {
                     }
 
                     val watchlistDeferred = async {
-                        checkIsInWatchlist(foundMovie.id)
+                        checkIsInWatchlist(foundMovie.id, foundMovie.tmdbId)
                     }
 
                     val tmdbEnrichDeferred = async {
@@ -621,19 +611,19 @@ class DetailViewModel : ViewModel() {
                             val safeSlug = if (!candidateTmdbId.isNullOrBlank()) "$baseSlug-$candidateTmdbId" else baseSlug
 
                             val moviePayload = buildJsonObject {
-                                put("title", JsonPrimitive(cleanTitle))
-                                put("slug", JsonPrimitive(safeSlug))
-                                put("type", JsonPrimitive(currentMovie.type.ifBlank { "movie" }))
-                                currentMovie.posterUrl?.takeIf { it.isNotBlank() }?.let { put("poster_url", JsonPrimitive(it)) }
-                                currentMovie.bannerUrlDesktop?.takeIf { it.isNotBlank() }?.let { put("banner_url_desktop", JsonPrimitive(it)) }
-                                currentMovie.bannerUrlMobile?.takeIf { it.isNotBlank() }?.let { put("banner_url_mobile", JsonPrimitive(it)) }
-                                currentMovie.description?.takeIf { it.isNotBlank() }?.let { put("description", JsonPrimitive(it)) }
-                                currentMovie.releaseYear?.let { put("release_year", JsonPrimitive(it)) }
-                                currentMovie.language?.takeIf { it.isNotBlank() }?.let { put("language", JsonPrimitive(it)) }
-                                candidateTmdbId?.takeIf { it.isNotBlank() }?.let { put("tmdb_id", JsonPrimitive(it)) }
-                                currentMovie.imdbId?.takeIf { it.isNotBlank() }?.let { put("imdb_id", JsonPrimitive(it)) }
-                                put("admin_note", JsonPrimitive("auto_saved_from_app"))
-                                put("is_adult", JsonPrimitive(currentMovie.isAdult ?: false))
+                                put("title", cleanTitle)
+                                put("slug", safeSlug)
+                                put("type", currentMovie.type.ifBlank { "movie" })
+                                currentMovie.posterUrl?.takeIf { it.isNotBlank() }?.let { put("poster_url", it) }
+                                currentMovie.bannerUrlDesktop?.takeIf { it.isNotBlank() }?.let { put("banner_url_desktop", it) }
+                                currentMovie.bannerUrlMobile?.takeIf { it.isNotBlank() }?.let { put("banner_url_mobile", it) }
+                                currentMovie.description?.takeIf { it.isNotBlank() }?.let { put("description", it) }
+                                currentMovie.releaseYear?.let { put("release_year", it) }
+                                currentMovie.language?.takeIf { it.isNotBlank() }?.let { put("language", it) }
+                                candidateTmdbId?.takeIf { it.isNotBlank() }?.let { put("tmdb_id", it) }
+                                currentMovie.imdbId?.takeIf { it.isNotBlank() }?.let { put("imdb_id", it) }
+                                put("admin_note", "auto_saved_from_app")
+                                put("is_adult", currentMovie.isAdult == true)
                             }
 
                             val insertedMovie = SupabaseClient.main.from("movies")
@@ -649,8 +639,8 @@ class DetailViewModel : ViewModel() {
 
                     if (targetState) {
                         val payload = buildJsonObject {
-                            put("user_id", JsonPrimitive(user.id))
-                            put("movie_id", JsonPrimitive(resolvedMovieId))
+                            put("user_id", user.id)
+                            put("movie_id", resolvedMovieId)
                         }
                         try {
                             SupabaseClient.main.from("user_watchlist").insert(payload)
