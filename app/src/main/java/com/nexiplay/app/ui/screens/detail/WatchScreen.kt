@@ -755,6 +755,45 @@ fun WatchScreen(
                     }
                 }
             }
+        } else if (server.id.startsWith("desidub") || lowerUrl.contains("/embed/desidub")) {
+            try {
+                webViewRef.value?.stopLoading()
+                webViewRef.value?.tag = "about:blank"
+                webViewRef.value?.loadUrl("about:blank")
+            } catch (_: Exception) {}
+            isResolvingServer = true
+            resolveProgress = 0.20f
+            resolveStatusText = "Connecting to Nexi Deshi Server..."
+            resolveJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val streamData = com.nexiplay.app.data.repository.WebFeaturesRepository.resolveDesiDubStream(
+                    title = state.movie?.title.orEmpty(),
+                    slug = state.movie?.slug.orEmpty(),
+                    id = state.movie?.id.orEmpty(),
+                    season = sNum,
+                    episode = eNum,
+                    serverId = server.id,
+                    onProgress = { p, msg ->
+                        scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                            resolveProgress = p
+                            resolveStatusText = msg
+                        }
+                    }
+                )
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    isResolvingServer = false
+                    val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() }
+                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
+                    if (playback != null || embed != null) {
+                        selectedServerUrl = playback ?: embed
+                    } else {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Anime not found on this server. Please choose Server Nexiplay.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
         } else if (server.id == "streamtape" || lowerUrl.contains("streamtape") || lowerUrl.contains("streamta.pe")) {
             try {
                 webViewRef.value?.stopLoading()

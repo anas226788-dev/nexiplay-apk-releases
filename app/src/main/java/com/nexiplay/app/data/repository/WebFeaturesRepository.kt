@@ -62,12 +62,87 @@ data class StreamtapeResult(
     val embedUrl: String = ""
 )
 
+@Serializable
+data class DesiDubStreamResult(
+    val success: Boolean = false,
+    val title: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val server: String? = null,
+    val playbackUrl: String? = null,
+    val embedUrl: String? = null,
+    val notFound: Boolean? = null,
+    val error: String? = null
+)
+
 object WebFeaturesRepository {
 
     const val BASE_WEB_URL = "https://nexiplay.vercel.app"
 
     // In-memory cache for resolved streams to ensure 0ms repeat loads
     private val rrStreamCache = java.util.concurrent.ConcurrentHashMap<String, RRStreamResult>()
+    private val desidubStreamCache = java.util.concurrent.ConcurrentHashMap<String, DesiDubStreamResult>()
+
+    suspend fun resolveDesiDubStream(
+        title: String,
+        slug: String,
+        id: String,
+        season: Int,
+        episode: Int,
+        serverId: String = "desidub",
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): DesiDubStreamResult? = withContext(Dispatchers.IO) {
+        val cacheKey = "${slug.trim()}_${title.trim()}_${season}_${episode}_${serverId.trim()}"
+        val cached = desidubStreamCache[cacheKey]
+        if (cached != null) {
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext cached
+        }
+
+        onProgress(0.30f, "Connecting to Nexi Deshi Server...")
+        val apiKey = "nxp_live_nexiplay_official_core_prod"
+        val queryBuilder = StringBuilder("season=$season&episode=$episode&server=$serverId&apiKey=$apiKey")
+        if (id.isNotBlank()) queryBuilder.append("&id=").append(URLEncoder.encode(id, "UTF-8"))
+        if (slug.isNotBlank()) queryBuilder.append("&slug=").append(URLEncoder.encode(slug, "UTF-8"))
+        if (title.isNotBlank()) queryBuilder.append("&title=").append(URLEncoder.encode(title, "UTF-8"))
+
+        val apiUrl = "$BASE_WEB_URL/api/v1/anime/desidub-stream?$queryBuilder"
+        try {
+            onProgress(0.65f, "Searching Hindi/Deshi Dub stream...")
+            val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 12000
+                readTimeout = 12000
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Referer", "$BASE_WEB_URL/")
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            }
+
+            val code = conn.responseCode
+            if (code in 200..299) {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(body)
+                if (obj.optBoolean("success", false)) {
+                    val playback = obj.optString("playbackUrl").takeIf { it.isNotBlank() }
+                    val embed = obj.optString("embedUrl").takeIf { it.isNotBlank() }
+                    val res = DesiDubStreamResult(
+                        success = true,
+                        title = obj.optString("title").takeIf { it.isNotBlank() },
+                        playbackUrl = playback,
+                        embedUrl = embed ?: playback,
+                        server = serverId
+                    )
+                    desidubStreamCache[cacheKey] = res
+                    onProgress(1.0f, "Stream ready, starting player...")
+                    return@withContext res
+                }
+            } else if (code == 404) {
+                return@withContext null
+            }
+        } catch (_: Exception) {}
+
+        null
+    }
 
     suspend fun fetchRRStreamApi(
         id: String,

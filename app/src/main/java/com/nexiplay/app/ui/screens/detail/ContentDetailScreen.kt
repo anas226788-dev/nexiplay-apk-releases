@@ -2300,6 +2300,21 @@ fun getAvailableServers(
         mergedStreams["rareanimes"] = movie.scraperUrl.trim()
     }
 
+    // Auto-enable Nexi Deshi Live Servers for Anime on demand
+    if (movie.type.equals("anime", ignoreCase = true) || isSeries) {
+        val encId = java.net.URLEncoder.encode(movie.id, "UTF-8")
+        val encSlug = java.net.URLEncoder.encode(movie.slug ?: "", "UTF-8")
+        val encTitle = java.net.URLEncoder.encode(movie.title, "UTF-8")
+        val liveDesiBase = "https://nexiplay.vercel.app/embed/desidub?id=$encId&slug=$encSlug&title=$encTitle&season=$seasonNumber&episode=$epNum&apiKey=nxp_live_nexiplay_official_core_prod"
+
+        if (!mergedStreams.containsKey("desidub")) mergedStreams["desidub"] = "$liveDesiBase&server=desidub"
+        if (!mergedStreams.containsKey("desidub_abyss")) mergedStreams["desidub_abyss"] = "$liveDesiBase&server=desidub_abyss"
+        if (!mergedStreams.containsKey("desidub_filemoon")) mergedStreams["desidub_filemoon"] = "$liveDesiBase&server=desidub_filemoon"
+        if (!mergedStreams.containsKey("desidub_streamtape")) mergedStreams["desidub_streamtape"] = "$liveDesiBase&server=desidub_streamtape"
+        if (!mergedStreams.containsKey("desidub_earnvids")) mergedStreams["desidub_earnvids"] = "$liveDesiBase&server=desidub_earnvids"
+        if (!mergedStreams.containsKey("desidub_doodstream")) mergedStreams["desidub_doodstream"] = "$liveDesiBase&server=desidub_doodstream"
+    }
+
     val customUrl = if (isSeries) (episode?.streamingUrl ?: streamingRow?.streamingUrl) else (movie.streamingUrl ?: streamingRow?.streamingUrl)
     if (!customUrl.isNullOrBlank()) {
         val trimmedUrl = customUrl.trim()
