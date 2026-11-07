@@ -68,7 +68,10 @@ fun WatchlistScreen(navController: NavController) {
                         emptyList()
                     }
 
-                    val movieIds = (userWlEntries.map { it.movieId } + appWlEntries.map { it.movieId }).distinct()
+                    val uuidRegex = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+                    val movieIds = (userWlEntries.map { it.movieId } + appWlEntries.map { it.movieId })
+                        .filter { uuidRegex.matches(it) }
+                        .distinct()
                     if (movieIds.isNotEmpty()) {
                         movies = SupabaseClient.main.from("movies")
                             .select { filter { isIn("id", movieIds) } }

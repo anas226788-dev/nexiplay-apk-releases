@@ -77,6 +77,9 @@ class DetailViewModel : ViewModel() {
 
         private val detailCache = ConcurrentHashMap<String, DetailUiState>()
         private val WHITESPACE_REGEX = Regex("""\s+""")
+        private val UUID_REGEX = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+        fun isUuid(value: String?): Boolean = !value.isNullOrBlank() && UUID_REGEX.matches(value)
 
         private fun cacheKey(slug: String): String = slug.trim().lowercase()
 
@@ -97,14 +100,33 @@ class DetailViewModel : ViewModel() {
     private val _state = MutableStateFlow(DetailUiState())
     val state: StateFlow<DetailUiState> = _state.asStateFlow()
 
-    private suspend fun checkIsInWatchlist(movieId: String): Boolean {
+    private suspend fun checkIsInWatchlist(movieId: String, tmdbId: String? = null): Boolean {
         val user = SupabaseClient.main.auth.currentUserOrNull() ?: return false
+        val resolvedMovieId = if (isUuid(movieId)) {
+            movieId
+        } else {
+            val tId = tmdbId ?: if (movieId.startsWith("tmdb-")) movieId.removePrefix("tmdb-").trim() else null
+            if (!tId.isNullOrBlank()) {
+                try {
+                    SupabaseClient.main.from("movies")
+                        .select(Columns.list("id")) {
+                            filter { eq("tmdb_id", tId) }
+                            limit(1)
+                        }
+                        .decodeList<WatchlistCheckRow>()
+                        .firstOrNull()?.let { it.id ?: it.movieId }
+                } catch (_: Exception) {
+                    null
+                }
+            } else null
+        } ?: return false
+
         val inUserWl = try {
             SupabaseClient.main.from("user_watchlist")
                 .select(Columns.list("movie_id")) {
                     filter {
                         eq("user_id", user.id)
-                        eq("movie_id", movieId)
+                        eq("movie_id", resolvedMovieId)
                     }
                 }
                 .decodeList<WatchlistCheckRow>()
@@ -119,7 +141,7 @@ class DetailViewModel : ViewModel() {
                 .select(Columns.list("movie_id")) {
                     filter {
                         eq("user_id", user.id)
-                        eq("movie_id", movieId)
+                        eq("movie_id", resolvedMovieId)
                     }
                 }
                 .decodeList<WatchlistCheckRow>()
@@ -174,11 +196,43 @@ class DetailViewModel : ViewModel() {
                         else -> "movie"
                     }
 
-                    // 0. Fast-path for virtual TMDB items (`tmdb-12345`)
-                    if (slug.startsWith("tmdb-")) {
+                    // 0. Check if this is a TMDB slug or explicit TMDB item, and see if it already exists in Supabase DB
+                    val explicitTmdbId = if (slug.startsWith("tmdb-")) slug.removePrefix("tmdb-").trim() else null
+                    val movieByTmdb = if (!explicitTmdbId.isNullOrBlank()) {
+                        try {
+                            SupabaseClient.main.from("movies")
+                                .select {
+                                    filter { eq("tmdb_id", explicitTmdbId) }
+                                    limit(1)
+                                }
+                                .decodeList<Movie>()
+                                .firstOrNull()
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else null
+
+                    // 1. If not found in DB by tmdb_id, check by slug from Supabase
+                    val foundMovie = movieByTmdb ?: run {
+                        val foundList = try {
+                            SupabaseClient.main.from("movies")
+                                .select {
+                                    filter { eq("slug", slug) }
+                                    limit(5)
+                                }
+                                .decodeList<Movie>()
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        foundList.firstOrNull { it.type.equals(dbType, ignoreCase = true) }
+                            ?: foundList.firstOrNull()
+                    }
+
+                    // Fallback to on-demand TMDB if not in local Supabase DB
+                    if (foundMovie == null) {
                         val tmdbBundle = TmdbRepository.fetchTmdbDetailBundle(dbType, slug)
                         if (tmdbBundle != null) {
-                            val isInWl = checkIsInWatchlist(tmdbBundle.movie.id)
+                            val isInWl = checkIsInWatchlist(tmdbBundle.movie.id, tmdbBundle.movie.tmdbId)
                             val actualType = tmdbBundle.movie.type.lowercase().let {
                                 if (it == "anime" || it == "series") it else "movie"
                             }
@@ -198,44 +252,13 @@ class DetailViewModel : ViewModel() {
                                 statusText = if (tmdbBundle.movie.isRunning == true) "Running" else (tmdbBundle.status ?: "Released"),
                                 tagline = tmdbBundle.tagline
                             )
-                        }
-                    }
-
-                    // 1. Fetch movie by slug from Supabase (flexible on `type` in case plural or mismatched route type was used)
-                    val foundList = try {
-                        SupabaseClient.main.from("movies")
-                            .select {
-                                filter { eq("slug", slug) }
-                                limit(5)
-                            }
-                            .decodeList<Movie>()
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
-                    val foundMovie = foundList.firstOrNull { it.type.equals(dbType, ignoreCase = true) }
-                        ?: foundList.firstOrNull()
-
-                    // Fallback to TMDB if slug was not found in local Supabase DB
-                    if (foundMovie == null) {
-                        val tmdbBundle = TmdbRepository.fetchTmdbDetailBundle(dbType, slug)
-                        if (tmdbBundle != null) {
-                            val isInWl = checkIsInWatchlist(tmdbBundle.movie.id)
-                            val actualType = tmdbBundle.movie.type.lowercase().let {
-                                if (it == "anime" || it == "series") it else "movie"
-                            }
+                        } else {
                             return@withContext DetailUiState(
                                 isLoading = false,
-                                movie = tmdbBundle.movie,
-                                resolvedType = actualType,
-                                categories = tmdbBundle.categories,
-                                seasons = tmdbBundle.seasons,
-                                episodes = tmdbBundle.episodes,
-                                screenshots = tmdbBundle.screenshots,
-                                relatedMovies = tmdbBundle.relatedMovies,
-                                isInWatchlist = isInWl,
-                                ratingScore = tmdbBundle.ratingScore ?: "8.5",
-                                duration = tmdbBundle.duration ?: tmdbBundle.movie.format ?: "HD",
-                                studioName = tmdbBundle.studioName ?: "Original",
+                                error = "Content not found."
+                            )
+                        }
+                    }
                                 statusText = tmdbBundle.status ?: "Released",
                                 tagline = tmdbBundle.tagline
                             )
@@ -564,10 +587,70 @@ class DetailViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    val candidateTmdbId = currentMovie.tmdbId?.takeIf { it.isNotBlank() }
+                        ?: if (currentMovie.slug.startsWith("tmdb-")) currentMovie.slug.removePrefix("tmdb-").trim() else null
+
+                    // Ensure movie has a valid UUID in Supabase `movies` table
+                    val resolvedMovieId: String = if (isUuid(currentMovie.id)) {
+                        currentMovie.id
+                    } else {
+                        // 1. Check if movie already exists in DB by tmdb_id
+                        val existingInDb = if (!candidateTmdbId.isNullOrBlank()) {
+                            try {
+                                SupabaseClient.main.from("movies")
+                                    .select {
+                                        filter { eq("tmdb_id", candidateTmdbId) }
+                                        limit(1)
+                                    }
+                                    .decodeList<Movie>()
+                                    .firstOrNull()
+                            } catch (_: Exception) { null }
+                        } else null
+
+                        if (existingInDb != null && isUuid(existingInDb.id)) {
+                            _state.value = _state.value.copy(movie = existingInDb)
+                            existingInDb.id
+                        } else {
+                            // 2. Auto-persist TMDB item to `movies` table so foreign key constraint is satisfied
+                            val cleanTitle = currentMovie.title.trim()
+                            val baseSlug = if (!currentMovie.slug.startsWith("tmdb-")) {
+                                currentMovie.slug
+                            } else {
+                                cleanTitle.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(50)
+                            }
+                            val safeSlug = if (!candidateTmdbId.isNullOrBlank()) "$baseSlug-$candidateTmdbId" else baseSlug
+
+                            val moviePayload = buildJsonObject {
+                                put("title", JsonPrimitive(cleanTitle))
+                                put("slug", JsonPrimitive(safeSlug))
+                                put("type", JsonPrimitive(currentMovie.type.ifBlank { "movie" }))
+                                currentMovie.posterUrl?.takeIf { it.isNotBlank() }?.let { put("poster_url", JsonPrimitive(it)) }
+                                currentMovie.bannerUrlDesktop?.takeIf { it.isNotBlank() }?.let { put("banner_url_desktop", JsonPrimitive(it)) }
+                                currentMovie.bannerUrlMobile?.takeIf { it.isNotBlank() }?.let { put("banner_url_mobile", JsonPrimitive(it)) }
+                                currentMovie.description?.takeIf { it.isNotBlank() }?.let { put("description", JsonPrimitive(it)) }
+                                currentMovie.releaseYear?.let { put("release_year", JsonPrimitive(it)) }
+                                currentMovie.language?.takeIf { it.isNotBlank() }?.let { put("language", JsonPrimitive(it)) }
+                                candidateTmdbId?.takeIf { it.isNotBlank() }?.let { put("tmdb_id", JsonPrimitive(it)) }
+                                currentMovie.imdbId?.takeIf { it.isNotBlank() }?.let { put("imdb_id", JsonPrimitive(it)) }
+                                put("admin_note", JsonPrimitive("auto_saved_from_app"))
+                                put("is_adult", JsonPrimitive(currentMovie.isAdult ?: false))
+                            }
+
+                            val insertedMovie = SupabaseClient.main.from("movies")
+                                .insert(moviePayload) {
+                                    select()
+                                }
+                                .decodeSingle<Movie>()
+
+                            _state.value = _state.value.copy(movie = insertedMovie)
+                            insertedMovie.id
+                        }
+                    }
+
                     if (targetState) {
                         val payload = buildJsonObject {
                             put("user_id", JsonPrimitive(user.id))
-                            put("movie_id", JsonPrimitive(currentMovie.id))
+                            put("movie_id", JsonPrimitive(resolvedMovieId))
                         }
                         try {
                             SupabaseClient.main.from("user_watchlist").insert(payload)
@@ -579,7 +662,7 @@ class DetailViewModel : ViewModel() {
                             SupabaseClient.main.from("user_watchlist").delete {
                                 filter {
                                     eq("user_id", user.id)
-                                    eq("movie_id", currentMovie.id)
+                                    eq("movie_id", resolvedMovieId)
                                 }
                             }
                         } catch (_: Exception) {}
@@ -587,7 +670,7 @@ class DetailViewModel : ViewModel() {
                             SupabaseClient.main.from("watchlist").delete {
                                 filter {
                                     eq("user_id", user.id)
-                                    eq("movie_id", currentMovie.id)
+                                    eq("movie_id", resolvedMovieId)
                                 }
                             }
                         } catch (_: Exception) {}

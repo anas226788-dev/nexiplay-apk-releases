@@ -416,8 +416,20 @@ fun LoginScreen(navController: NavController) {
                     } catch (_: GoogleSignInNotConfiguredException) {
                         error = "Google sign-in setup is incomplete. Add the Google Web OAuth client ID to the app configuration."
                     } catch (e: Exception) {
-                        val isCancelled = e.javaClass.simpleName.contains("cancel", ignoreCase = true)
-                        if (!isCancelled) error = UserFacingError.from(e, "Google sign-in didn't finish. Please try again.")
+                        android.util.Log.e("GoogleAuth", "Google sign-in exception: ${e.message}", e)
+                        val msg = e.message.orEmpty()
+                        val isCancelled = e.javaClass.simpleName.contains("cancel", ignoreCase = true) ||
+                            msg.contains("cancel", ignoreCase = true) ||
+                            msg.contains("ACTIVITY_STOPPED", ignoreCase = true)
+                        if (!isCancelled) {
+                            error = when {
+                                msg.contains("SHA-1", ignoreCase = true) || msg.contains("16") || msg.contains("DeveloperError", ignoreCase = true) ->
+                                    "Google configuration error. Make sure your Android SHA-1 fingerprint is added in Google Cloud Console."
+                                msg.contains("unregistered", ignoreCase = true) || msg.contains("unauthorized client", ignoreCase = true) ->
+                                    "Google Client ID is not registered or authorized in Supabase Auth."
+                                else -> UserFacingError.from(e, "Google sign-in didn't finish. Please try again.")
+                            }
+                        }
                     } finally {
                         googleLoading = false
                     }
