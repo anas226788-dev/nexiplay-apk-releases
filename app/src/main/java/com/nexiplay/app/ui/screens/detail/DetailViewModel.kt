@@ -152,6 +152,7 @@ class DetailViewModel : ViewModel() {
     }
 
     private fun logViewingHistory(movieId: String) {
+        if (!isUuid(movieId)) return
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val user = SupabaseClient.main.auth.currentUserOrNull()
@@ -164,8 +165,8 @@ class DetailViewModel : ViewModel() {
                     }
                     SupabaseClient.main.from("viewing_history").insert(
                         buildJsonObject {
-                            put("user_id", JsonPrimitive(user.id))
-                            put("movie_id", JsonPrimitive(movieId))
+                            put("user_id", user.id)
+                            put("movie_id", movieId)
                         }
                     )
                 }
