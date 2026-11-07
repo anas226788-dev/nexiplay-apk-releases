@@ -66,6 +66,9 @@ object WebFeaturesRepository {
 
     const val BASE_WEB_URL = "https://nexiplay.vercel.app"
 
+    // In-memory cache for resolved streams to ensure 0ms repeat loads
+    private val rrStreamCache = java.util.concurrent.ConcurrentHashMap<String, RRStreamResult>()
+
     suspend fun fetchRRStreamApi(
         id: String,
         slug: String,
@@ -73,13 +76,15 @@ object WebFeaturesRepository {
         episode: Int
     ): RRStreamResult? = withContext(Dispatchers.IO) {
         val apiKey = "nxp_live_nexiplay_official_core_prod"
-        val queryParam = if (id.isNotBlank()) "id=${URLEncoder.encode(id, "UTF-8")}" else "slug=${URLEncoder.encode(slug, "UTF-8")}"
-        val apiUrl = "$BASE_WEB_URL/api/v1/anime/stream?$queryParam&season=$season&episode=$episode&apiKey=$apiKey"
+        val queryBuilder = StringBuilder("season=$season&episode=$episode&apiKey=$apiKey")
+        if (id.isNotBlank()) queryBuilder.append("&id=").append(URLEncoder.encode(id, "UTF-8"))
+        if (slug.isNotBlank()) queryBuilder.append("&slug=").append(URLEncoder.encode(slug, "UTF-8"))
+        val apiUrl = "$BASE_WEB_URL/api/v1/anime/stream?$queryBuilder"
         try {
             val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 12000
-                readTimeout = 12000
+                connectTimeout = 8000
+                readTimeout = 8000
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Referer", "$BASE_WEB_URL/")
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
@@ -815,9 +820,11 @@ object WebFeaturesRepository {
     }
 
     /**
-     * Multi-stage local + API resolver for RR Nexiplay (RareAnimes / Codedew Zipper / Argon RazorShell).
-     * Resolves on the user's own device IP first (avoiding Vercel datacenter Cloudflare blocks
-     * and IP-bound HLS token mismatches), with automatic fallback to `fetchRRStreamApi`.
+     * Multi-stage high-speed resolver for RR Nexiplay (RareAnimes / Codedew Zipper / Argon RazorShell).
+     * 1. In-memory cache check (0ms)
+     * 2. Direct playable URL check (0ms)
+     * 3. High-speed backend API (/api/v1/anime/stream) (~300ms)
+     * 4. Safe localized scraper fallback if the backend API returns no stream
      */
     suspend fun resolveRRStream(
         rawUrl: String,
@@ -829,9 +836,40 @@ object WebFeaturesRepository {
         fallbackUrls: List<String> = emptyList(),
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): RRStreamResult? = withContext(Dispatchers.IO) {
-        onProgress(0.20f, "Connecting to Nexiplay stream...")
+        val cacheKey = "${id.trim()}_${slug.trim()}_${season}_${episode}"
 
-        // Step 1: Prioritize Live season post URLs to scrape fresh working stream
+        // 1. Check in-memory cache
+        val cached = rrStreamCache[cacheKey]
+        if (cached != null) {
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext cached
+        }
+
+        // 2. Check if rawUrl is already a direct playable stream (0ms)
+        val lowerRaw = rawUrl.trim().lowercase()
+        if (lowerRaw.contains(".m3u8") || lowerRaw.contains(".mp4") || lowerRaw.contains(".mkv") || lowerRaw.contains("workers.dev")) {
+            val res = RRStreamResult(
+                success = true,
+                playbackUrl = rawUrl.trim(),
+                embedUrl = rawUrl.trim(),
+                format = "hls_stream"
+            )
+            rrStreamCache[cacheKey] = res
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext res
+        }
+
+        // 3. PRIORITY 1: High-Speed Backend API (Instant HLS resolution)
+        onProgress(0.35f, "Connecting high-speed stream tunnel...")
+        val apiRes = fetchRRStreamApi(id = id, slug = slug, season = season, episode = episode)
+        if (apiRes != null && (!apiRes.playbackUrl.isNullOrBlank() || !apiRes.embedUrl.isNullOrBlank())) {
+            rrStreamCache[cacheKey] = apiRes
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext apiRes
+        }
+
+        // 4. PRIORITY 2 (FALLBACK): Local scraper if API had no stream
+        onProgress(0.60f, "Checking alternate stream routes...")
         val livePostUrls = (fallbackUrls + listOf(rawUrl))
             .map { it.trim() }
             .filter { (it.contains("rareanimes.", ignoreCase = true) || it.contains("raretoons.", ignoreCase = true)) &&
@@ -843,7 +881,6 @@ object WebFeaturesRepository {
 
         for (postUrl in livePostUrls) {
             try {
-                onProgress(0.45f, "Optimizing Episode $episode stream...")
                 val liveResolved = resolveWebEmbedUrl(
                     embedUrl = postUrl,
                     episodeNum = episode,
@@ -854,46 +891,51 @@ object WebFeaturesRepository {
                 if (liveResolved.isNotBlank() && liveResolved != postUrl) {
                     val lowerLive = liveResolved.lowercase()
                     if (lowerLive.contains(".m3u8") || lowerLive.contains(".mp4") || lowerLive.contains(".mkv") || lowerLive.contains("workers.dev") || lowerLive.contains("flashzipper")) {
-                        onProgress(1.0f, "Stream ready, starting player...")
-                        return@withContext RRStreamResult(
+                        val res = RRStreamResult(
                             success = true,
                             playbackUrl = liveResolved,
                             embedUrl = liveResolved,
                             format = "hls_stream"
                         )
+                        rrStreamCache[cacheKey] = res
+                        onProgress(1.0f, "Stream ready, starting player...")
+                        return@withContext res
                     }
 
                     if (!lowerLive.contains("razorshell.space")) {
-                        onProgress(1.0f, "Stream ready, starting player...")
-                        return@withContext RRStreamResult(
+                        val res = RRStreamResult(
                             success = true,
                             playbackUrl = null,
                             embedUrl = liveResolved,
                             format = "embed"
                         )
+                        rrStreamCache[cacheKey] = res
+                        onProgress(1.0f, "Stream ready, starting player...")
+                        return@withContext res
                     }
                 }
             } catch (_: Exception) {}
         }
 
-        // Step 2: Try other candidates (including rawUrl), skipping known dead razorshell/groovy.monster
+        // 5. Try other candidates
         val otherCandidates = (listOf(rawUrl) + fallbackUrls)
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.contains("/embed/rr", ignoreCase = true) }
             .distinct()
 
-        for ((index, candidate) in otherCandidates.withIndex()) {
+        for (candidate in otherCandidates) {
             try {
-                onProgress(0.50f + (index * 0.10f).coerceAtMost(0.20f), "Connecting high-speed tunnel...")
                 val lowerCandidate = candidate.lowercase()
                 if (lowerCandidate.contains(".m3u8") || lowerCandidate.contains(".mp4") || lowerCandidate.contains(".mkv") || lowerCandidate.contains("workers.dev")) {
-                    onProgress(1.0f, "Stream ready, starting player...")
-                    return@withContext RRStreamResult(
+                    val res = RRStreamResult(
                         success = true,
                         playbackUrl = candidate,
                         embedUrl = candidate,
                         format = "hls_stream"
                     )
+                    rrStreamCache[cacheKey] = res
+                    onProgress(1.0f, "Stream ready, starting player...")
+                    return@withContext res
                 }
 
                 val resolvedEmbed = resolveWebEmbedUrl(
@@ -905,57 +947,55 @@ object WebFeaturesRepository {
 
                 val lowerResolved = resolvedEmbed.lowercase()
                 if (lowerResolved.contains(".m3u8") || lowerResolved.contains(".mp4") || lowerResolved.contains(".mkv") || lowerResolved.contains("workers.dev") || lowerResolved.contains("flashzipper")) {
-                    onProgress(1.0f, "Stream ready, starting player...")
-                    return@withContext RRStreamResult(
+                    val res = RRStreamResult(
                         success = true,
                         playbackUrl = resolvedEmbed,
                         embedUrl = resolvedEmbed,
                         format = "hls_stream"
                     )
+                    rrStreamCache[cacheKey] = res
+                    onProgress(1.0f, "Stream ready, starting player...")
+                    return@withContext res
                 }
 
                 if (lowerResolved.contains("razorshell.space") || lowerResolved.contains("/embed/")) {
-                    onProgress(0.70f, "Buffering HD video stream...")
                     val embedHtml = httpGetHtml(
                         urlStr = resolvedEmbed,
                         referer = "https://codedew.com/",
-                        timeoutMs = 10000
+                        timeoutMs = 5000
                     )
                     val directM3u8 = if (!embedHtml.isNullOrBlank()) {
                         decodeJuicyCodesM3u8(embedHtml)
                     } else null
 
-                    // If directM3u8 is from groovy.monster, it returns 403 Forbidden ("Invalid signature") - do not use it!
                     if (directM3u8 != null && !directM3u8.contains("groovy.monster")) {
-                        onProgress(1.0f, "Stream ready, starting player...")
-                        return@withContext RRStreamResult(
+                        val res = RRStreamResult(
                             success = true,
                             playbackUrl = directM3u8,
                             embedUrl = resolvedEmbed,
                             format = "hls_stream"
                         )
+                        rrStreamCache[cacheKey] = res
+                        onProgress(1.0f, "Stream ready, starting player...")
+                        return@withContext res
                     }
                 }
 
                 if (resolvedEmbed.isNotBlank() && resolvedEmbed != candidate && !lowerResolved.contains("razorshell.space")) {
-                    onProgress(1.0f, "Stream ready, starting player...")
-                    return@withContext RRStreamResult(
+                    val res = RRStreamResult(
                         success = true,
                         playbackUrl = null,
                         embedUrl = resolvedEmbed,
                         format = "embed"
                     )
+                    rrStreamCache[cacheKey] = res
+                    onProgress(1.0f, "Stream ready, starting player...")
+                    return@withContext res
                 }
             } catch (_: Exception) {}
         }
 
-        // Step 3: Fetch secure stream token from API (which searches live and falls back to toonplay/animerulz)
-        onProgress(0.85f, "Securing stream token...")
-        val apiRes = fetchRRStreamApi(id = id, slug = slug, season = season, episode = episode)
-        if (apiRes != null) {
-            onProgress(1.0f, "Stream ready, starting player...")
-        }
-        apiRes
+        null
     }
 
     suspend fun resolveStreamtapeLocally(url: String): StreamtapeResult = withContext(Dispatchers.IO) {
@@ -1017,7 +1057,7 @@ object WebFeaturesRepository {
             currentUrl.contains("raretoons.", ignoreCase = true)
         ) {
             try {
-                val postHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 10000)
+                val postHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
                 if (!postHtml.isNullOrBlank()) {
                     var matchedZipper: String? = null
                     val candidateEps = listOf(relativeEpisodeNum, episodeNum).distinct()
@@ -1084,7 +1124,7 @@ object WebFeaturesRepository {
             currentUrl.contains("streambeta", ignoreCase = true)
         ) {
             try {
-                val zipperHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 10000)
+                val zipperHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
                 if (!zipperHtml.isNullOrBlank()) {
                     val streamUrlMatch = Regex(""""stream_url"\s*:\s*"([^"]+)"""").find(zipperHtml)
                         ?: Regex(""""url"\s*:\s*"(https?:\\/\\/[^"]*workers\.dev[^"]*)"""").find(zipperHtml)
