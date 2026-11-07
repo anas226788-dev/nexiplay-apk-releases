@@ -2187,6 +2187,13 @@ fun getAvailableServers(
     val cleanType = type.lowercase()
     val isSeries = cleanType == "series" || cleanType == "anime" || cleanType == "tv"
     val epNum = episode?.episodeNumber ?: 1
+    val isAnimeContent = cleanType == "anime" ||
+        movie.type.equals("anime", ignoreCase = true) ||
+        !movie.malId.isNullOrBlank() ||
+        movie.scraperSource?.contains("rareanimes", ignoreCase = true) == true ||
+        movie.scraperSource?.contains("animekhor", ignoreCase = true) == true ||
+        movie.title.contains("anime", ignoreCase = true) ||
+        isSeries
 
     // 1. ToonPlay Private Server (Hindi Dubbed) - Always attach seriesId when present so expired m3u8 URLs auto-refresh
     val tpUrl = if (isSeries) {
@@ -2221,6 +2228,21 @@ fun getAvailableServers(
                 isHindi = true
             )
         )
+    }
+
+    // 1.1 Priority Live Anime Servers: Nexi Deshi Servers (Always promoted to the top of anime server lists)
+    if (isAnimeContent) {
+        val encId = java.net.URLEncoder.encode(movie.id, "UTF-8")
+        val encSlug = java.net.URLEncoder.encode(movie.slug ?: "", "UTF-8")
+        val encTitle = java.net.URLEncoder.encode(movie.title, "UTF-8")
+        val liveDesiBase = "https://nexiplay.vercel.app/embed/desidub?id=$encId&slug=$encSlug&title=$encTitle&season=$seasonNumber&episode=$epNum&apiKey=nxp_live_nexiplay_official_core_prod"
+
+        servers.add(StreamServer("desidub", "Nexi Deshi Server", "$liveDesiBase&server=desidub", Color(0xFF10B981), "DESHI DUB", true))
+        servers.add(StreamServer("desidub_abyss", "Nexi Deshi Server 1 (Abyss)", "$liveDesiBase&server=desidub_abyss", Color(0xFF00E5FF), "DESHI FAST", true))
+        servers.add(StreamServer("desidub_filemoon", "Nexi Deshi Server 2 (Filemoon)", "$liveDesiBase&server=desidub_filemoon", Color(0xFFFF4081), "DESHI HD", true))
+        servers.add(StreamServer("desidub_streamtape", "Nexi Deshi Server 3 (Streamtape)", "$liveDesiBase&server=desidub_streamtape", Color(0xFF38BDF8), "DESHI STREAM", true))
+        servers.add(StreamServer("desidub_earnvids", "Nexi Deshi Server 4 (Earnvids)", "$liveDesiBase&server=desidub_earnvids", Color(0xFF2DD4BF), "DESHI ULTRA", true))
+        servers.add(StreamServer("desidub_doodstream", "Nexi Deshi Server 5 (Doodstream)", "$liveDesiBase&server=desidub_doodstream", Color(0xFFFBBF24), "DESHI TURBO", true))
     }
 
     // 2. AnimeRulz Server
@@ -3126,7 +3148,9 @@ fun getAvailableServers(
         return uniqueServers.filter { server ->
             val id = server.id.lowercase()
             val cleanId = id.removePrefix("multi_")
-            if (disabledMultiIds.contains(id) || disabledMultiIds.contains(cleanId)) {
+            if (id.startsWith("desidub") || id == "toonplay" || id == "rareanimes" || id == "animerulz") {
+                true
+            } else if (disabledMultiIds.contains(id) || disabledMultiIds.contains(cleanId)) {
                 false
             } else if (tokens.contains("!$id") || tokens.contains("disable_$id") || tokens.contains("!$cleanId") || tokens.contains("disable_$cleanId")) {
                 false

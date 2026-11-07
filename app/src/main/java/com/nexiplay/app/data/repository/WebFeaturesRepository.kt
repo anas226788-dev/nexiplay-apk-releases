@@ -168,16 +168,19 @@ object WebFeaturesRepository {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 val obj = JSONObject(body)
                 if (obj.optBoolean("success", false)) {
-                    val direct = obj.optString("directStreamUrl").takeIf { it.isNotBlank() }
-                    val playback = obj.optString("playbackUrl").takeIf { it.isNotBlank() }
-                    val embed = obj.optString("embedUrl").takeIf { it.isNotBlank() }
-                    return@withContext RRStreamResult(
-                        success = true,
-                        playbackUrl = direct ?: playback,
-                        embedUrl = embed ?: playback,
-                        title = obj.optString("title").takeIf { it.isNotBlank() },
-                        format = obj.optString("format").takeIf { it.isNotBlank() }
-                    )
+                    fun isDead(u: String?) = u.isNullOrBlank() || u.contains("streamindia.co.in", ignoreCase = true) || u.contains("groovy.monster", ignoreCase = true)
+                    val direct = obj.optString("directStreamUrl").takeIf { !isDead(it) }
+                    val playback = obj.optString("playbackUrl").takeIf { !isDead(it) }
+                    val embed = obj.optString("embedUrl").takeIf { !isDead(it) }
+                    if (direct != null || playback != null || embed != null) {
+                        return@withContext RRStreamResult(
+                            success = true,
+                            playbackUrl = direct ?: playback,
+                            embedUrl = embed ?: playback,
+                            title = obj.optString("title").takeIf { it.isNotBlank() },
+                            format = obj.optString("format").takeIf { it.isNotBlank() }
+                        )
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -977,17 +980,35 @@ object WebFeaturesRepository {
                         return@withContext res
                     }
 
-                    if (!lowerLive.contains("razorshell.space")) {
-                        val res = RRStreamResult(
-                            success = true,
-                            playbackUrl = null,
-                            embedUrl = liveResolved,
-                            format = "embed"
-                        )
-                        rrStreamCache[cacheKey] = res
-                        onProgress(1.0f, "Stream ready, starting player...")
-                        return@withContext res
+                    if (lowerLive.contains("razorshell.space") || lowerLive.contains("seeking.buzz") || lowerLive.contains("codedew")) {
+                        try {
+                            val embedHtml = httpGetHtml(liveResolved, referer = "https://codedew.com/", timeoutMs = 4000)
+                            if (!embedHtml.isNullOrBlank()) {
+                                val directM3u8 = decodeJuicyCodesM3u8(embedHtml)
+                                if (!directM3u8.isNullOrBlank()) {
+                                    val res = RRStreamResult(
+                                        success = true,
+                                        playbackUrl = directM3u8,
+                                        embedUrl = directM3u8,
+                                        format = "hls_stream"
+                                    )
+                                    rrStreamCache[cacheKey] = res
+                                    onProgress(1.0f, "Stream ready, starting player...")
+                                    return@withContext res
+                                }
+                            }
+                        } catch (_: Exception) {}
                     }
+
+                    val res = RRStreamResult(
+                        success = true,
+                        playbackUrl = null,
+                        embedUrl = liveResolved,
+                        format = "embed"
+                    )
+                    rrStreamCache[cacheKey] = res
+                    onProgress(1.0f, "Stream ready, starting player...")
+                    return@withContext res
                 }
             } catch (_: Exception) {}
         }

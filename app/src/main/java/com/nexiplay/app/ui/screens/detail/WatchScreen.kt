@@ -747,9 +747,9 @@ fun WatchScreen(
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     isResolvingServer = false
                     val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() }
-                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() && !it.contains("razorshell.space") && !it.contains("workers.dev") }
-                    fallbackWebEmbedUrl = embed?.takeIf { it != playback && !it.contains("razorshell.space") && !it.contains("workers.dev") }
-                    selectedServerUrl = playback ?: embed ?: (if (rawUrl.contains("razorshell.space")) null else rawUrl)
+                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() && !it.contains("workers.dev") }
+                    fallbackWebEmbedUrl = embed?.takeIf { it != playback && !it.contains("workers.dev") }
+                    selectedServerUrl = playback ?: embed ?: rawUrl
                     if (playback == null && embed == null) {
                         android.widget.Toast.makeText(context, "Stream temporarily unavailable on this server. Please choose Server Nexiplay.", android.widget.Toast.LENGTH_SHORT).show()
                     }
