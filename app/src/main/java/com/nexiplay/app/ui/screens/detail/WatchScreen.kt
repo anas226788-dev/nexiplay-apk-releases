@@ -348,7 +348,7 @@ private val ALLOWED_PLAYER_HOSTS = listOf(
     "rubystm", "dood", "mixdrop", "voe", "uqload", "streamtape", "mp4upload",
     "abyss", "short.ink", "abyssplayer", "ashleyhardat", "shannoncoldalready", "rendingdecreasehere", "playmogo", "ds2play",
     "circleftp", "moviebox", "aoneroom", "animekhor", "miruro", "aniclover",
-    "desidub", "bysetayico", "morencius", "hanerix", "filesforever", "iqsmartgames", "strp2p", "rpmstream", "upns.live",
+    "bysetayico", "morencius", "hanerix", "filesforever", "iqsmartgames", "strp2p", "rpmstream", "upns.live",
     "upcloud", "flixer", "vidnest", "primesrc", "vidspark", "vidstuck", "vidmoly",
     "medmedia", "vidup", "ythd", "soap2day", "soapgate", "streamta.pe",
     "iamcdn.net", "vibeplayer.site", "takutakutaku.workers.dev", "groovy.monster", "nexiplay.vercel.app"
@@ -362,6 +362,11 @@ private fun isAllowedMainFrameNavigation(targetUrl: String, currentServerUrl: St
 
     val targetHost = try { java.net.URI(lower).host?.lowercase().orEmpty() } catch (_: Exception) { "" }
     if (targetHost.isEmpty()) return false
+
+    // Block full scraper websites from hijacking the in-app player screen
+    if (targetHost.contains("desidubanime.me") || targetHost.contains("rareanimes.net") || targetHost.contains("toonstream.vip")) {
+        return false
+    }
 
     val currentHost = try {
         currentServerUrl?.let { java.net.URI(it.lowercase()).host?.lowercase() }.orEmpty()
@@ -786,7 +791,7 @@ fun WatchScreen(
                     val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
                     if (playback != null || embed != null) {
                         selectedServerUrl = playback ?: embed
-                    } else if (rawUrl.isNotBlank() && !rawUrl.startsWith("desidub:")) {
+                    } else if (rawUrl.isNotBlank() && !rawUrl.startsWith("desidub:") && !rawUrl.contains("desidubanime.me") && !rawUrl.contains("/embed/desidub")) {
                         selectedServerUrl = rawUrl
                     } else {
                         android.widget.Toast.makeText(

@@ -195,12 +195,18 @@ object WebFeaturesRepository {
 
             onProgress(0.70f, "Locating Episode $episode player...")
 
+            val titleSlug = matchedTitle?.let { cleanDesiTitle(it).lowercase().replace(Regex("""[^a-z0-9]+"""), "-").trim('-') }
+
             // 2. Candidate Watch URLs
-            val candidateWatchUrls = listOf(
-                "https://www.desidubanime.me/watch/$matchedSlug-episode-$episode/",
-                "https://www.desidubanime.me/watch/$matchedSlug-$episode/",
-                "https://www.desidubanime.me/watch/$matchedSlug-season-$season-episode-$episode/"
-            )
+            val candidateWatchUrls = buildList {
+                if (!titleSlug.isNullOrBlank()) {
+                    add("https://www.desidubanime.me/watch/$titleSlug-episode-$episode/")
+                    add("https://www.desidubanime.me/watch/$titleSlug-season-$season-episode-$episode/")
+                }
+                add("https://www.desidubanime.me/watch/$matchedSlug-episode-$episode/")
+                add("https://www.desidubanime.me/watch/$matchedSlug-$episode/")
+                add("https://www.desidubanime.me/watch/$matchedSlug-season-$season-episode-$episode/")
+            }
 
             var epHtml: String? = null
             for (cand in candidateWatchUrls) {
@@ -224,6 +230,17 @@ object WebFeaturesRepository {
                     }
                     if (targetEpUrl != null) {
                         epHtml = httpGetHtml(targetEpUrl, referer = matchedLink, timeoutMs = 5000)
+                    } else if (allWatchUrls.isNotEmpty()) {
+                        val sample = allWatchUrls.first()
+                        val baseSlug = sample
+                            .replace(Regex("""^https?://[^/]+/watch/""", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("""-episode-\d+.*$""", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("""-\d+/?$"""), "")
+                            .trim('/')
+                        if (baseSlug.isNotBlank()) {
+                            val reconstructed = "https://www.desidubanime.me/watch/$baseSlug-episode-$episode/"
+                            epHtml = httpGetHtml(reconstructed, referer = matchedLink, timeoutMs = 5000)
+                        }
                     }
                 }
             }
@@ -339,8 +356,8 @@ object WebFeaturesRepository {
         try {
             val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 3500
-                readTimeout = 3500
+                connectTimeout = 8000
+                readTimeout = 8000
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Referer", "$BASE_WEB_URL/")
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
