@@ -26,6 +26,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import org.json.JSONArray
 import org.json.JSONObject
 
 @Serializable
@@ -83,6 +84,234 @@ object WebFeaturesRepository {
     private val rrStreamCache = java.util.concurrent.ConcurrentHashMap<String, RRStreamResult>()
     private val desidubStreamCache = java.util.concurrent.ConcurrentHashMap<String, DesiDubStreamResult>()
 
+    private fun cleanDesiTitle(str: String): String {
+        return str.replace(Regex("""\([^)]*\)"""), "")
+            .replace(Regex("""\[[^\]]*\]"""), "")
+            .replace(Regex("""Season\s*\d+(?:-\d+)?(?:\.)?""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""-\d{4}$"""), "")
+            .replace(".", " ")
+            .trim()
+    }
+
+    private fun httpPostForm(
+        urlStr: String,
+        formData: String,
+        referer: String? = null,
+        origin: String? = null,
+        timeoutMs: Int = 8000
+    ): String? {
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            doOutput = true
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            setRequestProperty("Accept", "application/json, text/javascript, */*; q=0.01")
+            referer?.let { setRequestProperty("Referer", it) }
+            origin?.let { setRequestProperty("Origin", it) }
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        }
+        return try {
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(formData)
+                writer.flush()
+            }
+            val code = conn.responseCode
+            if (code in 200..299) {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private suspend fun extractDesiDubOnDevice(
+        title: String,
+        slug: String,
+        season: Int,
+        episode: Int,
+        serverId: String,
+        onProgress: (Float, String) -> Unit
+    ): DesiDubStreamResult? = withContext(Dispatchers.IO) {
+        try {
+            val cleanTitle = cleanDesiTitle(title.ifBlank { slug })
+            if (cleanTitle.isBlank()) return@withContext null
+
+            onProgress(0.55f, "Searching $cleanTitle on Nexi Deshi...")
+
+            // 1. Search Anime via WP REST API
+            val searchApiUrl = "https://www.desidubanime.me/wp-json/wp/v2/anime?search=" +
+                URLEncoder.encode(cleanTitle, "UTF-8") + "&per_page=10"
+            val restJson = httpGetHtml(searchApiUrl, referer = "https://www.desidubanime.me/", timeoutMs = 6000)
+
+            var matchedSlug: String? = null
+            var matchedLink: String? = null
+            var matchedTitle: String? = null
+
+            if (!restJson.isNullOrBlank() && restJson.trim().startsWith("[")) {
+                try {
+                    val arr = JSONArray(restJson.trim())
+                    val candidates = mutableListOf<JSONObject>()
+                    for (i in 0 until arr.length()) {
+                        candidates.add(arr.getJSONObject(i))
+                    }
+
+                    val seasonMarker = "season-$season"
+                    val seasonMarker2 = "${season}nd-season"
+                    val seasonMarker3 = "${season}rd-season"
+                    val seasonMarker4 = "${season}th-season"
+
+                    val exactSeasonMatch = if (season > 1) {
+                        candidates.firstOrNull {
+                            val s = it.optString("slug", "").lowercase()
+                            val t = it.optJSONObject("title")?.optString("rendered", "")?.lowercase() ?: ""
+                            s.contains(seasonMarker) || s.contains(seasonMarker2) || s.contains(seasonMarker3) || s.contains(seasonMarker4) ||
+                                t.contains("season $season") || t.contains("$season nd season") || t.contains("$season rd season") || t.contains("$season th season")
+                        }
+                    } else {
+                        candidates.firstOrNull {
+                            val s = it.optString("slug", "").lowercase()
+                            (s.contains("season-1") || s.contains("1st-season")) && !s.contains("movie")
+                        } ?: candidates.firstOrNull {
+                            val s = it.optString("slug", "").lowercase()
+                            !s.contains("season-") && !s.contains("2nd-") && !s.contains("3rd-") && !s.contains("movie")
+                        }
+                    }
+
+                    val chosen = exactSeasonMatch ?: candidates.firstOrNull()
+                    if (chosen != null) {
+                        matchedSlug = chosen.optString("slug")
+                        matchedLink = chosen.optString("link")
+                        matchedTitle = chosen.optJSONObject("title")?.optString("rendered")
+                    }
+                } catch (_: Exception) {}
+            }
+
+            if (matchedSlug.isNullOrBlank()) {
+                matchedSlug = cleanTitle.lowercase().replace(Regex("""[^a-z0-9]+"""), "-").trim('-')
+            }
+
+            onProgress(0.70f, "Locating Episode $episode player...")
+
+            // 2. Candidate Watch URLs
+            val candidateWatchUrls = listOf(
+                "https://www.desidubanime.me/watch/$matchedSlug-episode-$episode/",
+                "https://www.desidubanime.me/watch/$matchedSlug-$episode/",
+                "https://www.desidubanime.me/watch/$matchedSlug-season-$season-episode-$episode/"
+            )
+
+            var epHtml: String? = null
+            for (cand in candidateWatchUrls) {
+                val html = httpGetHtml(cand, referer = matchedLink ?: "https://www.desidubanime.me/", timeoutMs = 5000)
+                if (!html.isNullOrBlank() && html.contains("<iframe")) {
+                    epHtml = html
+                    break
+                }
+            }
+
+            // Fallback: parse anime post page to find watch link
+            if (epHtml.isNullOrBlank() && !matchedLink.isNullOrBlank()) {
+                val animePageHtml = httpGetHtml(matchedLink, referer = "https://www.desidubanime.me/", timeoutMs = 6000)
+                if (!animePageHtml.isNullOrBlank()) {
+                    val watchRegex = Regex("""href=["'](https?://(?:www\.)?desidubanime\.me/watch/[^"']+)["']""", RegexOption.IGNORE_CASE)
+                    val allWatchUrls = watchRegex.findAll(animePageHtml).map { it.groupValues[1] }.distinct().toList()
+                    val targetEpUrl = allWatchUrls.firstOrNull { u ->
+                        val m = Regex("""(?:episode|ep)-(\d+)|-(\d+)/?$""", RegexOption.IGNORE_CASE).find(u)
+                        val epFound = m?.groupValues?.getOrNull(1)?.toIntOrNull() ?: m?.groupValues?.getOrNull(2)?.toIntOrNull()
+                        epFound == episode
+                    }
+                    if (targetEpUrl != null) {
+                        epHtml = httpGetHtml(targetEpUrl, referer = matchedLink, timeoutMs = 5000)
+                    }
+                }
+            }
+
+            if (epHtml.isNullOrBlank()) return@withContext null
+
+            // 3. Extract player iframe
+            val iframeMatch = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(epHtml)
+            val iframeSrc = iframeMatch?.groupValues?.getOrNull(1) ?: return@withContext null
+
+            val serverMap = mutableMapOf<String, String>()
+
+            // 4. If filesforever / iqsmartgames -> extract 5 sub-servers via embedhelper2.php
+            if (iframeSrc.contains("filesforever.link/embed/") || iframeSrc.contains("iqsmartgames.com/svid/")) {
+                val sid = Regex("""(?:embed|svid)/([a-zA-Z0-9_-]+)""").find(iframeSrc)?.groupValues?.getOrNull(1)
+                if (!sid.isNullOrBlank()) {
+                    onProgress(0.85f, "Extracting high-speed video servers...")
+                    try {
+                        val helperUrl = "https://pro.iqsmartgames.com/embedhelper2.php"
+                        val postBody = "sid=${URLEncoder.encode(sid, "UTF-8")}&UserFavSite=&currentDomain=%5B%5D"
+                        val helperJson = httpPostForm(
+                            urlStr = helperUrl,
+                            formData = postBody,
+                            referer = "https://pro.iqsmartgames.com/svid/$sid",
+                            origin = "https://pro.iqsmartgames.com",
+                            timeoutMs = 6000
+                        )
+                        if (!helperJson.isNullOrBlank()) {
+                            val helperObj = JSONObject(helperJson)
+                            val mresult = helperObj.optString("mresult")
+                            if (mresult.isNotBlank()) {
+                                val decodedBytes = android.util.Base64.decode(mresult, android.util.Base64.DEFAULT)
+                                val decodedStr = String(decodedBytes, Charsets.UTF_8)
+                                val ids = JSONObject(decodedStr)
+                                val sources = helperObj.optJSONObject("sources")
+
+                                val abys = ids.optString("abys").takeIf { it.isNotBlank() }
+                                val flmn = ids.optString("flmn").takeIf { it.isNotBlank() }
+                                val strmtp = ids.optString("strmtp").takeIf { it.isNotBlank() }
+                                val flls = ids.optString("flls").takeIf { it.isNotBlank() } ?: ids.optString("smwh").takeIf { it.isNotBlank() }
+                                val ddstm = ids.optString("ddstm").takeIf { it.isNotBlank() }
+
+                                abys?.let { sources?.optJSONObject("abys")?.optString("siteUrl")?.let { u -> serverMap["desidub_abyss"] = "$u$it" } }
+                                flmn?.let { sources?.optJSONObject("flmn")?.optString("siteUrl")?.let { u -> serverMap["desidub_filemoon"] = "$u$it" } }
+                                strmtp?.let { sources?.optJSONObject("strmtp")?.let { s ->
+                                    val u = s.optString("siteUrl")
+                                    val sfx = s.optString("embed_suffix", "")
+                                    serverMap["desidub_streamtape"] = "$u$it$sfx"
+                                } }
+                                flls?.let {
+                                    val u = sources?.optJSONObject("flls")?.optString("siteUrl")
+                                        ?: sources?.optJSONObject("smwh")?.optString("siteUrl")
+                                    if (!u.isNullOrBlank()) serverMap["desidub_earnvids"] = "$u$it"
+                                }
+                                ddstm?.let { sources?.optJSONObject("ddstm")?.optString("siteUrl")?.let { u -> serverMap["desidub_doodstream"] = "$u$it" } }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            if (iframeSrc.contains("abyssplayer.com") || iframeSrc.contains("abyss.to") || iframeSrc.contains("short.ink")) {
+                serverMap["desidub_abyss"] = iframeSrc
+            }
+
+            val primary = serverMap["desidub_abyss"]
+                ?: serverMap["desidub_filemoon"]
+                ?: serverMap["desidub_streamtape"]
+                ?: serverMap["desidub_earnvids"]
+                ?: serverMap["desidub_doodstream"]
+                ?: iframeSrc
+
+            serverMap["desidub"] = primary
+
+            val targetUrl = serverMap[serverId] ?: primary
+
+            DesiDubStreamResult(
+                success = true,
+                title = matchedTitle ?: cleanTitle,
+                playbackUrl = targetUrl,
+                embedUrl = targetUrl,
+                server = serverId
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun resolveDesiDubStream(
         title: String,
         slug: String,
@@ -99,7 +328,7 @@ object WebFeaturesRepository {
             return@withContext cached
         }
 
-        onProgress(0.30f, "Connecting to Nexi Deshi Server...")
+        onProgress(0.20f, "Connecting to Nexi Deshi Server...")
         val apiKey = "nxp_live_nexiplay_official_core_prod"
         val queryBuilder = StringBuilder("season=$season&episode=$episode&server=$serverId&apiKey=$apiKey")
         if (id.isNotBlank()) queryBuilder.append("&id=").append(URLEncoder.encode(id, "UTF-8"))
@@ -108,11 +337,10 @@ object WebFeaturesRepository {
 
         val apiUrl = "$BASE_WEB_URL/api/v1/anime/desidub-stream?$queryBuilder"
         try {
-            onProgress(0.65f, "Searching Hindi/Deshi Dub stream...")
             val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 12000
-                readTimeout = 12000
+                connectTimeout = 3500
+                readTimeout = 3500
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Referer", "$BASE_WEB_URL/")
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
@@ -125,21 +353,30 @@ object WebFeaturesRepository {
                 if (obj.optBoolean("success", false)) {
                     val playback = obj.optString("playbackUrl").takeIf { it.isNotBlank() }
                     val embed = obj.optString("embedUrl").takeIf { it.isNotBlank() }
-                    val res = DesiDubStreamResult(
-                        success = true,
-                        title = obj.optString("title").takeIf { it.isNotBlank() },
-                        playbackUrl = playback,
-                        embedUrl = embed ?: playback,
-                        server = serverId
-                    )
-                    desidubStreamCache[cacheKey] = res
-                    onProgress(1.0f, "Stream ready, starting player...")
-                    return@withContext res
+                    if (playback != null || embed != null) {
+                        val res = DesiDubStreamResult(
+                            success = true,
+                            title = obj.optString("title").takeIf { it.isNotBlank() } ?: title,
+                            playbackUrl = playback,
+                            embedUrl = embed ?: playback,
+                            server = serverId
+                        )
+                        desidubStreamCache[cacheKey] = res
+                        onProgress(1.0f, "Stream ready, starting player...")
+                        return@withContext res
+                    }
                 }
-            } else if (code == 404) {
-                return@withContext null
             }
         } catch (_: Exception) {}
+
+        // Fallback: On-Device Extraction directly from desidubanime.me
+        onProgress(0.40f, "Searching Hindi/Deshi Dub stream on-device...")
+        val onDevice = extractDesiDubOnDevice(title, slug, season, episode, serverId, onProgress)
+        if (onDevice != null) {
+            desidubStreamCache[cacheKey] = onDevice
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext onDevice
+        }
 
         null
     }
@@ -897,6 +1134,38 @@ object WebFeaturesRepository {
         }
     }
 
+    private fun liveSearchRareAnimesPostOnDevice(title: String, seasonNum: Int): String? {
+        val cleanTitle = cleanDesiTitle(title)
+        if (cleanTitle.isBlank()) return null
+        val searchUrl = "https://www.rareanimes.fans/?s=" + URLEncoder.encode(cleanTitle, "UTF-8")
+        val html = httpGetHtml(searchUrl, referer = "https://rareanimes.fans/", timeoutMs = 6000) ?: return null
+
+        val articleRegex = Regex("""<article\b[^>]*>([\s\S]*?)</article>""", RegexOption.IGNORE_CASE)
+        val seasonRegex = Regex("""season\s*0*$seasonNum\b""", RegexOption.IGNORE_CASE)
+
+        val articles = articleRegex.findAll(html).toList()
+        for (a in articles) {
+            val content = a.groupValues[1]
+            val titleMatch = Regex("""<h2\b[^>]*>([\s\S]*?)</h2>""", RegexOption.IGNORE_CASE).find(content)
+            val hrefMatch = Regex("""href=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).find(content)
+            if (titleMatch != null && hrefMatch != null) {
+                val artTitle = titleMatch.groupValues[1].replace(Regex("<[^>]+>"), "").trim()
+                val artUrl = hrefMatch.groupValues[1]
+                if (seasonRegex.containsMatchIn(artTitle) || seasonRegex.containsMatchIn(artUrl)) {
+                    return artUrl
+                }
+            }
+        }
+
+        for (a in articles) {
+            val hrefMatch = Regex("""href=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).find(a.groupValues[1])
+            if (hrefMatch != null) {
+                return hrefMatch.groupValues[1]
+            }
+        }
+        return null
+    }
+
     /**
      * Multi-stage high-speed resolver for RR Nexiplay (RareAnimes / Codedew Zipper / Argon RazorShell).
      * 1. In-memory cache check (0ms)
@@ -912,6 +1181,7 @@ object WebFeaturesRepository {
         episode: Int,
         relativeEpisode: Int = episode,
         fallbackUrls: List<String> = emptyList(),
+        title: String = "",
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): RRStreamResult? = withContext(Dispatchers.IO) {
         val cacheKey = "${id.trim()}_${slug.trim()}_${season}_${episode}"
@@ -956,6 +1226,15 @@ object WebFeaturesRepository {
                 !it.contains("/embed/rr", ignoreCase = true)
             }
             .distinct()
+            .toMutableList()
+
+        if (livePostUrls.isEmpty() && (title.isNotBlank() || slug.isNotBlank())) {
+            val queryTitle = title.ifBlank { slug }
+            val foundPost = liveSearchRareAnimesPostOnDevice(queryTitle, season)
+            if (!foundPost.isNullOrBlank()) {
+                livePostUrls.add(foundPost)
+            }
+        }
 
         for (postUrl in livePostUrls) {
             try {

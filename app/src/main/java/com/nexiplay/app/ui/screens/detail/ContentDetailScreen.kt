@@ -2230,13 +2230,15 @@ fun getAvailableServers(
         )
     }
 
-    // 1.1 Priority Live Anime Servers: Nexi Deshi Servers (Always promoted to the top of anime server lists)
+    // 1.1 Priority Live Anime Servers: RR Nexiplay & Nexi Deshi Servers (Always promoted to the top of anime server lists)
     if (isAnimeContent) {
         val encId = java.net.URLEncoder.encode(movie.id, "UTF-8")
         val encSlug = java.net.URLEncoder.encode(movie.slug ?: "", "UTF-8")
         val encTitle = java.net.URLEncoder.encode(movie.title, "UTF-8")
+        val liveRRUrl = "https://nexiplay.vercel.app/embed/rr?id=$encId&slug=$encSlug&season=$seasonNumber&episode=$epNum&apiKey=nxp_live_nexiplay_official_core_prod"
         val liveDesiBase = "https://nexiplay.vercel.app/embed/desidub?id=$encId&slug=$encSlug&title=$encTitle&season=$seasonNumber&episode=$epNum&apiKey=nxp_live_nexiplay_official_core_prod"
 
+        servers.add(StreamServer("rareanimes", "RR Nexiplay (Hindi Dub)", liveRRUrl, Color(0xFFE91E63), "HINDI DUB", true))
         servers.add(StreamServer("desidub", "Nexi Deshi Server", "$liveDesiBase&server=desidub", Color(0xFF10B981), "DESHI DUB", true))
         servers.add(StreamServer("desidub_abyss", "Nexi Deshi Server 1 (Abyss)", "$liveDesiBase&server=desidub_abyss", Color(0xFF00E5FF), "DESHI FAST", true))
         servers.add(StreamServer("desidub_filemoon", "Nexi Deshi Server 2 (Filemoon)", "$liveDesiBase&server=desidub_filemoon", Color(0xFFFF4081), "DESHI HD", true))
@@ -2450,7 +2452,7 @@ fun getAvailableServers(
                     val encSlug = java.net.URLEncoder.encode(movie.slug ?: "", "UTF-8")
                     "https://nexiplay.vercel.app/embed/rr?id=$encId&slug=$encSlug&season=$seasonNumber&episode=$epNum&apiKey=nxp_live_nexiplay_official_core_prod"
                 }
-                servers.add(StreamServer("rareanimes", "Nexiplay Live (Hindi Dub)", targetUrl, Color(0xFFE91E63), "HINDI DUB", true))
+                servers.add(StreamServer("rareanimes", "RR Nexiplay (Hindi Dub)", targetUrl, Color(0xFFE91E63), "HINDI DUB", true))
             }
             "doodstream" -> servers.add(StreamServer("doodstream", if (isContentHindi) "Nexi Turbo (Hindi Dub)" else "Nexi Turbo Server", normalizedUrl, Color(0xFFFBBF24), if (isContentHindi) "HINDI DUB" else "TURBO FAST", isContentHindi))
             "streamtape" -> servers.add(StreamServer("streamtape", if (isContentHindi) "Nexi Pulse (Hindi Dub)" else "Nexi Pulse Server", normalizedUrl, Color(0xFF38BDF8), if (isContentHindi) "HINDI DUB" else "PULSE HD", isContentHindi))

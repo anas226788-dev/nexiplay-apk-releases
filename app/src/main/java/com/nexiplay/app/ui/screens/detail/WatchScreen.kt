@@ -737,6 +737,7 @@ fun WatchScreen(
                     episode = eNum,
                     relativeEpisode = relativeEpNum,
                     fallbackUrls = fallbackCandidates,
+                    title = state.movie?.title.orEmpty(),
                     onProgress = { p, msg ->
                         scope.launch(kotlinx.coroutines.Dispatchers.Main) {
                             resolveProgress = p
@@ -785,6 +786,8 @@ fun WatchScreen(
                     val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
                     if (playback != null || embed != null) {
                         selectedServerUrl = playback ?: embed
+                    } else if (rawUrl.isNotBlank() && !rawUrl.startsWith("desidub:")) {
+                        selectedServerUrl = rawUrl
                     } else {
                         android.widget.Toast.makeText(
                             context,
