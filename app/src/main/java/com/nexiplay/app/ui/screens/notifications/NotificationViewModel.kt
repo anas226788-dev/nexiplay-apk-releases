@@ -80,7 +80,7 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
                             SupabaseClient.main.from("updates")
                                 .select {
                                     filter { eq("is_active", true) }
-                                    order("created_at", Order.DESCENDING)
+                                    order("updated_at", Order.DESCENDING)
                                     limit(40)
                                 }
                                 .decodeList<UpdateItem>()
@@ -109,7 +109,7 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
                                     )
                                 ) {
                                     filter { eq("is_running", true) }
-                                    order("created_at", Order.DESCENDING)
+                                    order("updated_at", Order.DESCENDING)
                                     limit(20)
                                 }
                                 .decodeList<Movie>()

@@ -153,7 +153,7 @@ object EpisodeUpdatesNotificationManager {
                     runCatching {
                         db.from("updates").select {
                             filter { eq("is_active", true) }
-                            order("created_at", Order.DESCENDING)
+                            order("updated_at", Order.DESCENDING)
                             limit(20)
                         }.decodeList<UpdateItem>()
                     }.getOrDefault(emptyList())
@@ -169,7 +169,7 @@ object EpisodeUpdatesNotificationManager {
                             )
                         ) {
                             filter { eq("is_running", true) }
-                            order("created_at", Order.DESCENDING)
+                            order("updated_at", Order.DESCENDING)
                             limit(30)
                         }.decodeList<Movie>()
                     }.getOrDefault(emptyList())
