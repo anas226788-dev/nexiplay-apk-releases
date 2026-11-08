@@ -121,39 +121,44 @@ object ToonplayResolver {
                 return@withContext fallback(cachedUrl, "Episode S${season}E${episode} not found")
             }
 
-            // ── Step 3: Extract video player URL ──
+            // ── Step 3: Extract video player URL & Watch Servers ──
             val epId = targetEp.optString("id", "")
-            val episodeUrl = if (epId.startsWith("http")) epId else "https://animesalt.ac/$epId"
+            val episodeUrl = if (epId.startsWith("http")) epId else "https://animesalt.cx/$epId"
 
             val extractUrl = "https://anime.streamindia.co.in/api/extract?url=${URLEncoder.encode(episodeUrl, "UTF-8")}"
             val extractJson = httpGet(extractUrl)
-            val playerUrl = extractJson.optJSONObject("data")?.optString("videoPlayerUrl", null)
-                ?: return@withContext fallback(cachedUrl, "No video player URL found")
+            val extractData = extractJson.optJSONObject("data")
+            val watchServers = extractData?.optJSONArray("watchServers")
 
-            // ── Step 4: Get the actual .m3u8 stream URL ──
-            val streamUrl = "https://extract.streamindia.co.in/api?url=${URLEncoder.encode(playerUrl, "UTF-8")}"
-            val streamJson = httpGet(streamUrl)
-            val files = streamJson.optJSONObject("files")
-                ?: return@withContext fallback(cachedUrl, "No streaming files found")
-
-            // Prefer Hindi > English > Japanese > first available
-            val m3u8 = files.optString("hin", null)
-                ?: files.optString("eng", null)
-                ?: files.optString("jpn", null)
-                ?: run {
-                    val keys = files.keys()
-                    if (keys.hasNext()) files.optString(keys.next(), null) else null
+            var finalPlayerUrl = ""
+            if (watchServers != null) {
+                for (k in 0 until watchServers.length()) {
+                    val ws = watchServers.optJSONObject(k)
+                    val u = ws?.optString("url", "") ?: ""
+                    if (u.contains("animesalt.cx") && u.contains("player.php")) {
+                        finalPlayerUrl = "https://animesalt.streamindia.co.in/abyss?url=${URLEncoder.encode(u, "UTF-8")}"
+                        break
+                    }
                 }
-
-            if (m3u8.isNullOrBlank()) {
-                return@withContext fallback(cachedUrl, "No streaming files found")
+            }
+            if (finalPlayerUrl.isEmpty() && watchServers != null && watchServers.length() > 0) {
+                finalPlayerUrl = watchServers.optJSONObject(0)?.optString("url", "") ?: ""
+            }
+            if (finalPlayerUrl.isEmpty()) {
+                finalPlayerUrl = extractData?.optString("videoPlayerUrl", "") ?: ""
             }
 
-            val languages = mutableListOf<String>()
-            val keys = files.keys()
-            while (keys.hasNext()) languages.add(keys.next())
+            if (finalPlayerUrl.isNotEmpty()) {
+                return@withContext ResolveResult(url = finalPlayerUrl, source = "fresh", languages = listOf("Multi-Audio"))
+            }
 
-            ResolveResult(url = m3u8, source = "fresh", languages = languages)
+            // Fallback to web resolver
+            val webRes = com.nexiplay.app.data.repository.WebFeaturesRepository.resolveToonplayStream(toonplayId, season, episode, cachedUrl)
+            if (!webRes.isNullOrBlank()) {
+                return@withContext ResolveResult(url = webRes, source = "web_resolver")
+            }
+
+            fallback(cachedUrl, "No streaming files found")
         } catch (e: Exception) {
             fallback(cachedUrl, "Couldn't connect to the selected streaming source.")
         }
