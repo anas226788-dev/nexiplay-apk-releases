@@ -36,7 +36,8 @@ data class VaultDownloadResult(
     val directUrl: String? = null,
     val fileName: String? = null,
     val quality: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val source: String? = null
 )
 
 @Serializable
@@ -595,11 +596,22 @@ object WebFeaturesRepository {
         }
     }
 
-    private fun probeDirectDownloadUrl(proxyUrl: String?, directUrl: String): Boolean {
+    private fun probeDirectDownloadUrl(proxyUrl: String?, directUrl: String, source: String? = null): Boolean {
         val cleanDirect = directUrl.trim()
         if (cleanDirect.isEmpty()) return false
         val lower = cleanDirect.lowercase()
         if (lower.contains("/direct/tv/") || lower.contains("/direct/movie/")) return false
+
+        // If from ToonPlay or trusted cloud host (HubCloud, Mega, GDFlix, Google Drive, etc.), trust immediately
+        if (source.equals("toonplay", ignoreCase = true) ||
+            lower.contains("hubcloud.") || lower.contains("gdflix.") || lower.contains("fpgo.") || lower.contains("adhlinks.") ||
+            lower.contains("drive.google.com") || lower.contains("mega.nz") ||
+            lower.contains("mediafire.com") || lower.contains("pixeldrain.") ||
+            lower.contains("terabox.") || lower.contains("pcloud.") ||
+            lower.contains("workers.dev") || lower.contains("storage.")
+        ) {
+            return true
+        }
 
         if (!proxyUrl.isNullOrBlank() && probeSingleUrl(proxyUrl, "$BASE_WEB_URL/")) {
             return true
@@ -616,9 +628,11 @@ object WebFeaturesRepository {
         episode: Int? = null,
         quality: String = "720p",
         title: String? = null,
+        mediaType: String? = null,
         fallbackStreamUrls: List<String> = emptyList()
     ): VaultDownloadResult = withContext(Dispatchers.IO) {
         val cleanTargetId = targetId.trim().removePrefix("tmdb-")
+        val effectiveType = mediaType ?: if (isTv) "tv" else "movie"
         if (cleanTargetId.isNotEmpty()) {
             val fallbackQualities = listOf("720p", "1080p", "480p", "360p").filter { !it.equals(quality, ignoreCase = true) }
             val candidates = buildList {
@@ -638,7 +652,7 @@ object WebFeaturesRepository {
             for ((sCandidate, eCandidate, qCandidate) in candidates) {
                 try {
                     val payload = buildJsonObject {
-                        put("type", JsonPrimitive(if (isTv) "tv" else "movie"))
+                        put("type", JsonPrimitive(effectiveType))
                         put("id", JsonPrimitive(cleanTargetId))
                         if (isTv && sCandidate != null) put("season", JsonPrimitive(sCandidate))
                         if (isTv && eCandidate != null) put("episode", JsonPrimitive(eCandidate))
@@ -654,7 +668,7 @@ object WebFeaturesRepository {
                     }
 
                     if (parsed.success && !resolvedUrl.isNullOrBlank() && direct.isNotBlank()) {
-                        if (probeDirectDownloadUrl(resolvedUrl, direct)) {
+                        if (probeDirectDownloadUrl(resolvedUrl, direct, parsed.source)) {
                             return@withContext parsed.copy(
                                 url = resolvedUrl,
                                 directUrl = direct,

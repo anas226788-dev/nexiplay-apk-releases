@@ -173,6 +173,7 @@ fun ContentDetailScreen(
             }.distinct()
 
             scope.launch {
+                val isAnimeContent = type.equals("anime", ignoreCase = true) || movie.type.equals("anime", ignoreCase = true)
                 val res = WebFeaturesRepository.resolveVaultDownload(
                     isTv = isTv,
                     targetId = targetId,
@@ -180,6 +181,7 @@ fun ContentDetailScreen(
                     episode = eNum,
                     quality = quality,
                     title = movie.title,
+                    mediaType = if (isAnimeContent) "anime" else if (isTv) "tv" else "movie",
                     fallbackStreamUrls = fallbackUrls
                 )
                 vaultLoadingKey = null
@@ -195,10 +197,23 @@ fun ContentDetailScreen(
                     )
                     val directTarget = res.directUrl?.takeIf { it.isNotBlank() }
                     val proxyOrDirectTarget = res.url?.takeIf { it.isNotBlank() } ?: directTarget
+                    val isCloudMirror = res.source.equals("toonplay", ignoreCase = true) ||
+                        directTarget?.let { u ->
+                            val l = u.lowercase()
+                            l.contains("hubcloud.") || l.contains("gdflix.") || l.contains("drive.google.") || l.contains("mega.nz") || l.contains("terabox.") || l.contains("fpgo.") || l.contains("adhlinks.")
+                        } == true
+
                     val safeFileName = (res.fileName?.takeIf { it.isNotBlank() }
                         ?: "${movie.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}_${if (sNum != null && eNum != null) "S${sNum}E${eNum}_" else ""}${resolvedQuality}.mkv")
                     var enqueuedNatively = false
-                    if (directTarget != null && proxyOrDirectTarget != null) {
+
+                    if (isCloudMirror) {
+                        val cloudUrl = res.url ?: directTarget ?: proxyOrDirectTarget
+                        if (!cloudUrl.isNullOrBlank()) {
+                            openLink(cloudUrl, context, navController)
+                            Toast.makeText(context, "Opening ToonPlay cloud download ($resolvedQuality)...", Toast.LENGTH_SHORT).show()
+                        }
+                    } else if (directTarget != null && proxyOrDirectTarget != null) {
                         try {
                             val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
                             if (dm != null) {
@@ -224,7 +239,7 @@ fun ContentDetailScreen(
                             enqueuedNatively = false
                         }
                     }
-                    if (!enqueuedNatively && !res.url.isNullOrBlank()) {
+                    if (!isCloudMirror && !enqueuedNatively && !res.url.isNullOrBlank()) {
                         openLink(res.url, context, navController)
                     }
                 } else {
