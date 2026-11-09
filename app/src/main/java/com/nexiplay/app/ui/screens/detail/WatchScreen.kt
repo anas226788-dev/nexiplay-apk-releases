@@ -190,9 +190,12 @@ private fun normalizeWebPlayerUrl(url: String): String {
             val parts = (uri.path ?: "").split("/").filter { it.isNotBlank() && it != "abyss" && it != "player" && it != "api" }
             val id = parts.lastOrNull()
             if (!id.isNullOrBlank() && id != "abyss") {
-                return "https://player.abyssplayer.com/$id"
+                val encoded = java.net.URLEncoder.encode("https://player.abyssplayer.com/$id", "UTF-8")
+                return "https://nexiplay.vercel.app/api/player/abyss?url=$encoded"
             }
         } catch (_: Exception) {}
+        val encoded = java.net.URLEncoder.encode(cleanUrl, "UTF-8")
+        return "https://nexiplay.vercel.app/api/player/abyss?url=$encoded"
     }
     return cleanUrl
 }
@@ -203,11 +206,12 @@ private fun loadTargetUrlInWebView(webView: android.webkit.WebView, targetUrl: S
         webView.loadUrl("about:blank")
         return
     }
-    val ref = resolveWebViewReferer(cleanUrl)
+    val finalUrl = normalizeWebPlayerUrl(cleanUrl)
+    val ref = resolveWebViewReferer(finalUrl)
     if (ref.isNotBlank()) {
-        webView.loadUrl(cleanUrl, mapOf("Referer" to ref))
+        webView.loadUrl(finalUrl, mapOf("Referer" to ref))
     } else {
-        webView.loadUrl(cleanUrl)
+        webView.loadUrl(finalUrl)
     }
 }
 
@@ -323,7 +327,7 @@ private fun resolveWebViewReferer(targetUrl: String): String {
         lower.contains("playmogo") || lower.contains("dood") -> "https://doodstream.com/"
         lower.contains("streamtape") || lower.contains("streamta.pe") -> "https://streamtape.com/"
         lower.contains("voe.sx") || lower.contains("voe") -> "https://voe.sx/"
-        lower.contains("abyss") -> "https://abyss.to/"
+        lower.contains("abyss") -> "https://nexiplay.vercel.app/"
         lower.contains("vidmoly") -> "https://vidmoly.to/"
         (lower.contains("/embed") && !lower.contains("vidsrc.buzz") && !lower.contains("videm.xyz")) ||
             lower.contains("cinemaos") ||
@@ -363,8 +367,8 @@ private fun isAllowedMainFrameNavigation(targetUrl: String, currentServerUrl: St
     val targetHost = try { java.net.URI(lower).host?.lowercase().orEmpty() } catch (_: Exception) { "" }
     if (targetHost.isEmpty()) return false
 
-    // Block full scraper websites from hijacking the in-app player screen
-    if (targetHost.contains("desidubanime.me") || targetHost.contains("rareanimes.net") || targetHost.contains("toonstream.vip")) {
+    // Block full scraper websites and marketing pages from hijacking the in-app player screen
+    if (targetHost.contains("desidubanime.me") || targetHost.contains("rareanimes.net") || targetHost.contains("toonstream.vip") || targetHost == "abyss.to" || targetHost.endsWith(".abyss.to")) {
         return false
     }
 
@@ -377,7 +381,7 @@ private fun isAllowedMainFrameNavigation(targetUrl: String, currentServerUrl: St
     }
 
     // Allow legitimate sub-navigation/redirects originating from clean proxy/embed players
-    if (currentHost.contains("voe") || currentHost.contains("abyss") || currentHost.contains("streamtape") ||
+    if (currentHost.contains("voe") || currentHost.contains("streamtape") ||
         currentHost.contains("ashleyhardat") || currentHost.contains("shannoncoldalready")) {
         return true
     }
@@ -790,9 +794,10 @@ fun WatchScreen(
                     val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() }
                     val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
                     if (playback != null || embed != null) {
-                        selectedServerUrl = playback ?: embed
+                        val streamToPlay = playback ?: embed!!
+                        selectedServerUrl = normalizeWebPlayerUrl(streamToPlay)
                     } else if (rawUrl.isNotBlank() && !rawUrl.startsWith("desidub:") && !rawUrl.contains("desidubanime.me") && !rawUrl.contains("/embed/desidub")) {
-                        selectedServerUrl = rawUrl
+                        selectedServerUrl = normalizeWebPlayerUrl(rawUrl)
                     } else {
                         android.widget.Toast.makeText(
                             context,
@@ -1366,6 +1371,9 @@ fun WatchScreen(
                                                         return true
                                                     }
                                                     if (isAdUrl(reqUrl) || reqUrl.contains("disable-devtool", ignoreCase = true) || reqUrl.contains("theajack.github.io", ignoreCase = true)) {
+                                                        return true
+                                                    }
+                                                    if (reqUrl.contains("abyss.to", ignoreCase = true)) {
                                                         return true
                                                     }
                                                     if (request.isForMainFrame) {

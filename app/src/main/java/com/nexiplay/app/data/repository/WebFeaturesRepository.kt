@@ -302,14 +302,15 @@ object WebFeaturesRepository {
                 }
             }
 
-            if (iframeSrc.contains("abyssplayer.com") || iframeSrc.contains("abyss.to") || iframeSrc.contains("short.ink")) {
-                serverMap["desidub_abyss"] = iframeSrc
+            val rawAbyss = serverMap["desidub_abyss"] ?: if (iframeSrc.contains("abyssplayer.com") || iframeSrc.contains("abyss.to") || iframeSrc.contains("short.ink")) iframeSrc else null
+            if (rawAbyss != null) {
+                serverMap["desidub_abyss"] = "$BASE_WEB_URL/api/player/abyss?url=${URLEncoder.encode(rawAbyss, "UTF-8")}"
             }
 
-            val primary = serverMap["desidub_abyss"]
-                ?: serverMap["desidub_filemoon"]
-                ?: serverMap["desidub_streamtape"]
+            val primary = serverMap["desidub_filemoon"]
+                ?: serverMap["desidub_abyss"]
                 ?: serverMap["desidub_earnvids"]
+                ?: serverMap["desidub_streamtape"]
                 ?: serverMap["desidub_doodstream"]
                 ?: iframeSrc
 
@@ -368,8 +369,10 @@ object WebFeaturesRepository {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 val obj = JSONObject(body)
                 if (obj.optBoolean("success", false)) {
-                    val playback = obj.optString("playbackUrl").takeIf { it.isNotBlank() }
-                    val embed = obj.optString("embedUrl").takeIf { it.isNotBlank() }
+                    val rawPlayback = obj.optString("playbackUrl").takeIf { it.isNotBlank() }
+                    val rawEmbed = obj.optString("embedUrl").takeIf { it.isNotBlank() }
+                    val playback = if (rawPlayback?.startsWith("/") == true) "$BASE_WEB_URL$rawPlayback" else rawPlayback
+                    val embed = if (rawEmbed?.startsWith("/") == true) "$BASE_WEB_URL$rawEmbed" else rawEmbed
                     if (playback != null || embed != null) {
                         val res = DesiDubStreamResult(
                             success = true,
