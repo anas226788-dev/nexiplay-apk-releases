@@ -107,10 +107,15 @@ fun LeaderboardScreen(navController: NavController) {
                     if (bal != null) realCoins = bal.balance
                 } catch (_: Exception) {}
 
-                // Fetch watched count
+                // Fetch watched count (watch events only)
                 try {
                     val evList = SupabaseClient.main.from("user_events")
-                        .select { filter { eq("user_id", currentUserId) } }
+                        .select {
+                            filter {
+                                eq("user_id", currentUserId)
+                                eq("event_type", "watch")
+                            }
+                        }
                         .decodeList<com.nexiplay.app.data.model.UserEvent>()
                     realWatched = evList.size
                 } catch (_: Exception) {}
@@ -120,32 +125,43 @@ fun LeaderboardScreen(navController: NavController) {
         }
 
         try {
-            val list = SupabaseClient.main.from("leaderboard_entries")
-                .select { order("rank", order = Order.ASCENDING) }
+            val rawList = SupabaseClient.main.from("leaderboard_entries")
+                .select {
+                    filter { eq("is_fake", false) }
+                    order("rank", order = Order.ASCENDING)
+                }
                 .decodeList<LeaderboardEntry>()
+                .filter { !it.isFake }
+                .distinctBy { it.userId ?: "rank_${it.rank}" }
+                .distinctBy { it.rank }
 
-            if (list.isNotEmpty()) {
+            if (rawList.isNotEmpty()) {
                 val activeBadge = realProfile?.vipBadge?.takeIf {
                     val exp = com.nexiplay.app.data.util.AdManager.parseDateRobust(realProfile.vipBadgeExpires)
                     exp == null || exp.isAfter(java.time.Instant.now())
                 }
-                entries = list.map { e ->
+                entries = rawList.mapIndexed { idx, e ->
+                    val normalizedRank = idx + 1
                     if (e.userId == currentUserId && realProfile != null) {
                         e.copy(
+                            rank = normalizedRank,
                             avatarUrl = realProfile.avatarUrl ?: e.avatarUrl,
                             name = realProfile.displayName ?: e.name,
                             badgeType = activeBadge ?: e.badgeType,
-                            coins = realCoins,
-                            watchedCount = realWatched
+                            coins = maxOf(realCoins, e.coins),
+                            watchedCount = maxOf(realWatched, e.watchedCount),
+                            isFake = false
                         )
-                    } else e
+                    } else {
+                        e.copy(rank = normalizedRank, isFake = false)
+                    }
                 }
             } else {
-                entries = generateFallbackLeaderboard(realProfile, currentUserId, realCoins, realWatched)
+                entries = fetchRealUsersFallback(realProfile, currentUserId, realCoins, realWatched)
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            entries = generateFallbackLeaderboard(realProfile, currentUserId, realCoins, realWatched)
+            entries = fetchRealUsersFallback(realProfile, currentUserId, realCoins, realWatched)
         } finally {
             isLoading = false
         }
@@ -790,58 +806,98 @@ private fun LeaderboardRowItem(
     }
 }
 
-/** Fallback generator using realistic lower coin values suitable for app launch */
-private fun generateFallbackLeaderboard(
+/**
+ * Real-user fallback query if leaderboard_entries is empty.
+ * Strictly returns real database users only (zero synthetic users).
+ */
+private suspend fun fetchRealUsersFallback(
     realProfile: UserProfile?,
     currentUserId: String?,
     realCoins: Int,
     realWatched: Int
 ): List<LeaderboardEntry> {
-    val names = listOf(
-        realProfile?.displayName ?: "Nexi User",
-        "Tanvir_Pro", "Siam_Vip", "Mahir_X", "Nibir_77",
-        "Rafi_Hero", "Sabbir_Otaku", "Fahim_Stream", "Rayan_99", "Imran_VIP",
-        "Tahmid_Ninja", "Nabil_Elite", "Hamza_Play", "Zayan_Legend", "Faris_Ultra"
-    )
-    val badges = listOf(
-        realProfile?.vipBadge ?: "elite",
-        "vip", "vip", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"
-    )
-    val animeAvatars = listOf(
-        realProfile?.avatarUrl,
-        "https://api.dicebear.com/7.x/bottts/png?seed=Tanvir",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Siam",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Mahir",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Nibir",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Rafi",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Sabbir",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Fahim",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Rayan",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Imran",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Tahmid",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Nabil",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Hamza",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Zayan",
-        "https://api.dicebear.com/7.x/bottts/png?seed=Faris"
-    )
+    return try {
+        val profiles = SupabaseClient.main.from("profiles")
+            .select(Columns.list("id", "email", "display_name", "avatar_url", "vip_badge", "vip_badge_expires"))
+            .decodeList<UserProfile>()
+        val balances = SupabaseClient.main.from("coin_balances")
+            .select()
+            .decodeList<CoinBalance>()
+            .associate { it.userId to it.balance }
 
-    return List(15) { index ->
-        val r = index + 1
-        val isFirst = index == 0
-        // Low realistic coins for newly launched app: 180, 160, 140... down to 10
-        val simCoinVal = if (isFirst) realCoins else maxOf(8, 180 - (r * 11))
-        val simWatchedVal = if (isFirst) realWatched else maxOf(1, 16 - r)
+        val now = java.time.Instant.now()
+        val scored = profiles.map { p ->
+            val exp = com.nexiplay.app.data.util.AdManager.parseDateRobust(p.vipBadgeExpires)
+            val isBadgeActive = exp == null || exp.isAfter(now)
+            val badge = if (isBadgeActive) (p.vipBadge?.lowercase() ?: "none") else "none"
+            val badgeWeight = when {
+                badge.contains("elite") || badge == "gold_vip" -> 100_000_000L
+                badge.contains("vip") -> 50_000_000L
+                else -> 0L
+            }
+            val coins = if (p.id == currentUserId) maxOf(realCoins, balances[p.id] ?: 0) else (balances[p.id] ?: 0)
+            val watched = if (p.id == currentUserId) realWatched else 0
+            val score = badgeWeight + (coins.toLong() * 1000L) + watched.coerceAtMost(999)
+            val displayName = p.displayName?.takeIf { it.isNotBlank() }
+                ?: p.email?.substringBefore("@")
+                ?: "Nexi User"
 
-        LeaderboardEntry(
-            id = "lb_$r",
-            rank = r,
-            userId = if (isFirst) currentUserId else null,
-            name = if (isFirst && realProfile?.displayName != null) realProfile.displayName else names[index],
-            avatarUrl = if (isFirst) realProfile?.avatarUrl else animeAvatars[index],
-            badgeType = if (isFirst && realProfile?.vipBadge != null) realProfile.vipBadge else badges[index],
-            coins = simCoinVal,
-            watchedCount = simWatchedVal,
-            isFake = !isFirst
-        )
+            Triple(
+                score,
+                coins,
+                LeaderboardEntry(
+                    id = "real_${p.id}",
+                    rank = 1,
+                    userId = p.id,
+                    name = displayName,
+                    avatarUrl = p.avatarUrl,
+                    badgeType = badge,
+                    coins = coins,
+                    watchedCount = watched,
+                    isFake = false
+                )
+            )
+        }
+            .sortedWith(
+                compareByDescending<Triple<Long, Int, LeaderboardEntry>> { it.first }
+                    .thenByDescending { it.second }
+            )
+            .take(15)
+            .mapIndexed { index, triple ->
+                triple.third.copy(rank = index + 1)
+            }
+
+        if (scored.isNotEmpty()) scored
+        else if (currentUserId != null && realProfile != null) {
+            listOf(
+                LeaderboardEntry(
+                    id = "real_$currentUserId",
+                    rank = 1,
+                    userId = currentUserId,
+                    name = realProfile.displayName ?: "Nexi User",
+                    avatarUrl = realProfile.avatarUrl,
+                    badgeType = realProfile.vipBadge ?: "none",
+                    coins = realCoins,
+                    watchedCount = realWatched,
+                    isFake = false
+                )
+            )
+        } else emptyList()
+    } catch (_: Exception) {
+        if (currentUserId != null && realProfile != null) {
+            listOf(
+                LeaderboardEntry(
+                    id = "real_$currentUserId",
+                    rank = 1,
+                    userId = currentUserId,
+                    name = realProfile.displayName ?: "Nexi User",
+                    avatarUrl = realProfile.avatarUrl,
+                    badgeType = realProfile.vipBadge ?: "none",
+                    coins = realCoins,
+                    watchedCount = realWatched,
+                    isFake = false
+                )
+            )
+        } else emptyList()
     }
 }
