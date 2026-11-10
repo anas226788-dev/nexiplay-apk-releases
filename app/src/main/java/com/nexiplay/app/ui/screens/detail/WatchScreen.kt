@@ -1040,6 +1040,7 @@ fun WatchScreen(
         state.movie?.let { movie ->
             val isSeries = (movie.type == "series" || movie.type == "anime")
             if (isSeries && selectedEpisode == null && state.seasons.isNotEmpty()) return@LaunchedEffect
+            com.nexiplay.app.data.util.CoinRewardHelper.recordEpisodeWatch(context)
 
             val user = SupabaseClient.main.auth.currentUserOrNull()
             if (user != null) {
@@ -1069,7 +1070,7 @@ fun WatchScreen(
                     eventId = inserted.id
 
                     // Record watch for daily coin rewards
-                    com.nexiplay.app.data.util.CoinRewardHelper.recordEpisodeWatch(context)
+                    // Watch coin reward already recorded above
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }

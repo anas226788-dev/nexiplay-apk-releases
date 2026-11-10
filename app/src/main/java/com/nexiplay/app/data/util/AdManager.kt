@@ -73,12 +73,15 @@ object AdManager {
     var isUserAdFree = false
     var userBadgeType = ""  // "vip", "elite_pro", "gold_vip", "elite"
     var badgeExpiresAt: String? = null  // ISO date string for badge expiry
+    var doubleBoostUntil: String? = null // ISO date string for 2x coin boost expiry
 
     private var isUnityInitialized = false
     @Volatile var isConfigLoaded = false
     private var pendingActivity: java.lang.ref.WeakReference<Activity>? = null
     private val _premiumState = MutableStateFlow(false)
     val premiumState: StateFlow<Boolean> = _premiumState.asStateFlow()
+    private val _badgeUpdateTick = MutableStateFlow(0L)
+    val badgeUpdateTick: StateFlow<Long> = _badgeUpdateTick.asStateFlow()
 
     /**
      * Register activity for deferred Unity initialization.
@@ -95,6 +98,7 @@ object AdManager {
 
     private fun refreshPremiumState() {
         _premiumState.value = isUserPremium()
+        _badgeUpdateTick.value = System.currentTimeMillis()
     }
     
     /** Returns true if user has any active (non-expired) premium badge */
@@ -114,6 +118,50 @@ object AdManager {
             return true
         }
         return false
+    }
+
+    /** Returns true if user has an active (non-expired) Elite Pro / Gold VIP badge */
+    fun isUserElite(): Boolean {
+        val badgeStr = userBadgeType.trim().lowercase()
+        if (badgeStr.contains("elite") || badgeStr == "gold_vip") {
+            val expiry = parseDateRobust(badgeExpiresAt)
+            if (expiry != null && expiry.isBefore(java.time.Instant.now())) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+    /** Returns the latest active 2x Coin Boost expiry Instant, or null if not active */
+    fun getDoubleBoostExpiryInstant(context: Context? = null): java.time.Instant? {
+        val now = java.time.Instant.now()
+        val candidates = mutableListOf<java.time.Instant>()
+
+        // 1. Elite Pro badge includes 2x Coin Boost for the duration of the badge
+        if (isUserElite()) {
+            parseDateRobust(badgeExpiresAt)?.takeIf { it.isAfter(now) }?.let { candidates.add(it) }
+        }
+
+        // 2. Profile double_boost_until column
+        parseDateRobust(doubleBoostUntil)?.takeIf { it.isAfter(now) }?.let { candidates.add(it) }
+
+        // 3. Local NexiPlayShop boost_expiry
+        if (context != null) {
+            val shopPrefs = context.getSharedPreferences("NexiPlayShop", Context.MODE_PRIVATE)
+            val localMs = shopPrefs.getLong("boost_expiry", 0L)
+            if (localMs > System.currentTimeMillis()) {
+                candidates.add(java.time.Instant.ofEpochMilli(localMs))
+            }
+        }
+
+        return candidates.maxOrNull()
+    }
+
+    /** Returns true if 2x Coin Boost is active (via Elite Pro badge, DB double_boost_until, or local 24h boost) */
+    fun isDoubleCoinBoostActive(context: Context? = null): Boolean {
+        if (isUserElite() && badgeExpiresAt.isNullOrBlank()) return true
+        return getDoubleBoostExpiryInstant(context) != null
     }
 
     // Marketing Upsell Popup Config
@@ -138,16 +186,22 @@ object AdManager {
     fun parseDateRobust(dateStr: String?): java.time.Instant? {
         if (dateStr.isNullOrEmpty()) return null
         return try {
-            var fixed = dateStr.replace(" ", "T")
+            var fixed = dateStr.trim().replace(" ", "T")
             if (fixed.endsWith("+00:00")) {
                 fixed = fixed.replace("+00:00", "Z")
+            } else if (fixed.endsWith("+00")) {
+                fixed = fixed.removeSuffix("+00") + "Z"
             }
-            if (!fixed.contains("Z") && !fixed.contains("+")) {
+            if (!fixed.contains("Z") && !fixed.contains("+") && fixed.length > 10) {
                 fixed += "Z"
             }
             java.time.Instant.parse(fixed)
         } catch (e: Exception) {
-            null
+            try {
+                java.time.OffsetDateTime.parse(dateStr.trim().replace(" ", "T")).toInstant()
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
@@ -158,36 +212,85 @@ object AdManager {
         val savedBadge = prefs.getString("user_badge_type", null)
         userBadgeType = savedBadge?.trim().orEmpty()
         badgeExpiresAt = prefs.getString("badge_expires_at", null)
+        doubleBoostUntil = prefs.getString("double_boost_until", null)
         
+        val now = java.time.Instant.now()
+
         // Check if badge has expired and clear it
         val badgeExpiry = parseDateRobust(badgeExpiresAt)
-        if (badgeExpiry != null && badgeExpiry.isBefore(java.time.Instant.now())) {
+        if (badgeExpiry != null && badgeExpiry.isBefore(now)) {
             android.util.Log.d("AdManager", "⏰ Badge expired, clearing: $userBadgeType")
             userBadgeType = ""
             badgeExpiresAt = null
             prefs.edit().remove("user_badge_type").remove("badge_expires_at").apply()
         }
+
+        // Check if double_boost_until has expired
+        val boostExpiry = parseDateRobust(doubleBoostUntil)
+        if (boostExpiry != null && boostExpiry.isBefore(now)) {
+            doubleBoostUntil = null
+            prefs.edit().remove("double_boost_until").apply()
+        }
         
-        if (!expiry.isNullOrEmpty()) {
-            try {
-                val parsed = parseDateRobust(expiry)
-                if (parsed != null && parsed.isAfter(java.time.Instant.now())) {
-                    isUserAdFree = true
-                    refreshPremiumState()
-                    return
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+        // Check ad_free_until or active badge expiry
+        val adFreeParsed = parseDateRobust(expiry)
+        val validBadgeExpiry = parseDateRobust(badgeExpiresAt)?.takeIf { it.isAfter(now) }
+        val activeAdFree = (adFreeParsed != null && adFreeParsed.isAfter(now)) ||
+            (userBadgeType.isNotEmpty() && (validBadgeExpiry != null || badgeExpiresAt.isNullOrBlank()))
+
+        isUserAdFree = activeAdFree
+        refreshPremiumState()
+    }
+
+    fun syncProfilePerks(
+        context: Context,
+        vipBadge: String?,
+        vipBadgeExpires: String?,
+        adFreeUntil: String?,
+        doubleBoostUntilStr: String? = null
+    ) {
+        val now = java.time.Instant.now()
+        val badgeExpInstant = parseDateRobust(vipBadgeExpires)
+        val isBadgeStillValid = !vipBadge.isNullOrBlank() && (badgeExpInstant == null || badgeExpInstant.isAfter(now))
+
+        userBadgeType = if (isBadgeStillValid) vipBadge!!.trim() else ""
+        badgeExpiresAt = if (isBadgeStillValid) vipBadgeExpires else null
+
+        val adFreeInstant = parseDateRobust(adFreeUntil)
+        val latestAdFree = listOfNotNull(
+            adFreeInstant?.takeIf { it.isAfter(now) },
+            badgeExpInstant?.takeIf { isBadgeStillValid && it.isAfter(now) }
+        ).maxOrNull()?.toString()
+
+        val boostInstant = parseDateRobust(doubleBoostUntilStr)
+        val isEliteActive = isBadgeStillValid && (userBadgeType.lowercase().contains("elite") || userBadgeType.lowercase() == "gold_vip")
+        val latestBoost = listOfNotNull(
+            boostInstant?.takeIf { it.isAfter(now) },
+            badgeExpInstant?.takeIf { isEliteActive && it.isAfter(now) }
+        ).maxOrNull()
+
+        doubleBoostUntil = latestBoost?.toString()
+
+        if (latestBoost != null) {
+            val shopPrefs = context.getSharedPreferences("NexiPlayShop", Context.MODE_PRIVATE)
+            val currentLocal = shopPrefs.getLong("boost_expiry", 0L)
+            val remoteMs = latestBoost.toEpochMilli()
+            if (remoteMs > currentLocal) {
+                shopPrefs.edit().putLong("boost_expiry", remoteMs).apply()
             }
         }
-        isUserAdFree = false
-        refreshPremiumState()
+
+        setAdFreeExpiry(context, latestAdFree)
     }
 
     fun setAdFreeExpiry(context: Context, expiry: String?) {
         val prefs = context.getSharedPreferences("NexiPlayPrefs", Context.MODE_PRIVATE)
         prefs.edit().apply {
-            putString("ad_free_until", expiry)
+            if (!expiry.isNullOrEmpty()) {
+                putString("ad_free_until", expiry)
+            } else {
+                remove("ad_free_until")
+            }
             if (userBadgeType.isNotEmpty()) {
                 putString("user_badge_type", userBadgeType)
             } else {
@@ -198,13 +301,18 @@ object AdManager {
             } else {
                 remove("badge_expires_at")
             }
+            if (!doubleBoostUntil.isNullOrEmpty()) {
+                putString("double_boost_until", doubleBoostUntil)
+            } else {
+                remove("double_boost_until")
+            }
         }.apply()
         syncAdFreeStatus(context)
     }
 
     fun getAdFreeExpiry(context: Context): String? {
         val prefs = context.getSharedPreferences("NexiPlayPrefs", Context.MODE_PRIVATE)
-        return prefs.getString("ad_free_until", null)
+        return prefs.getString("ad_free_until", null) ?: badgeExpiresAt
     }
 
     fun initStartIo(context: Context, appId: String) {

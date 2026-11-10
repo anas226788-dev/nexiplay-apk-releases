@@ -143,6 +143,8 @@ fun RequestContentScreen(navController: NavController) {
             Spacer(Modifier.height(24.dp))
 
             // Submit
+            val shopPrefs = remember { context.getSharedPreferences("NexiPlayShop", android.content.Context.MODE_PRIVATE) }
+            val hasPriorityPass = com.nexiplay.app.data.util.AdManager.isUserPremium() || shopPrefs.getBoolean("priority_request_ready", false)
             Button(
                 onClick = {
                     val currentUser = SupabaseClient.main.auth.currentUserOrNull()
@@ -152,43 +154,55 @@ fun RequestContentScreen(navController: NavController) {
                     }
                     loading = true
                     error = null
-                    android.widget.Toast.makeText(context, "Loading Ad...", android.widget.Toast.LENGTH_SHORT).show()
-                    com.nexiplay.app.data.util.AdManager.showRewardedAd(
-                        context = context,
-                        onRewarded = {
-                            scope.launch {
-                                val user = SupabaseClient.main.auth.currentUserOrNull()
-                                if (user == null) {
-                                    error = "Please login first"
-                                    loading = false
-                                    return@launch
-                                }
-                                try {
-                                    val userMetadata = mapOf(
-                                        "user_id" to user.id,
-                                        "user_email" to user.email,
-                                        "type" to selectedType,
-                                        "notes" to notes.trim().ifEmpty { null },
-                                        "source" to "android_app"
-                                    )
-                                    val insertMap = mapOf(
-                                        "content_name" to title.trim(),
-                                        "status" to "pending",
-                                        "scraped_data" to userMetadata
-                                    )
-                                    SupabaseClient.main.from("content_requests").insert(insertMap)
-                                    submitted = true
-                                } catch (e: Exception) {
-                                    error = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't submit your request. Please try again.")
-                                }
+
+                    val submitRequestNow: (Boolean) -> Unit = { isPriority ->
+                        scope.launch {
+                            val user = SupabaseClient.main.auth.currentUserOrNull()
+                            if (user == null) {
+                                error = "Please login first"
                                 loading = false
+                                return@launch
                             }
-                        },
-                        onFailed = {
+                            try {
+                                val userMetadata = mapOf(
+                                    "user_id" to user.id,
+                                    "user_email" to user.email,
+                                    "type" to selectedType,
+                                    "notes" to notes.trim().ifEmpty { null },
+                                    "priority" to if (isPriority) "true" else "false",
+                                    "badge" to com.nexiplay.app.data.util.AdManager.userBadgeType.ifBlank { null },
+                                    "source" to "android_app"
+                                )
+                                val insertMap = mapOf(
+                                    "content_name" to title.trim(),
+                                    "status" to "pending",
+                                    "scraped_data" to userMetadata
+                                )
+                                SupabaseClient.main.from("content_requests").insert(insertMap)
+                                shopPrefs.edit().putBoolean("priority_request_ready", false).apply()
+                                submitted = true
+                            } catch (e: Exception) {
+                                error = com.nexiplay.app.ui.util.UserFacingError.from(e, "Couldn't submit your request. Please try again.")
+                            }
                             loading = false
-                            android.widget.Toast.makeText(context, "Failed to load Ad", android.widget.Toast.LENGTH_SHORT).show()
                         }
-                    )
+                    }
+
+                    if (com.nexiplay.app.data.util.AdManager.isUserPremium() || shopPrefs.getBoolean("priority_request_ready", false)) {
+                        submitRequestNow(true)
+                    } else {
+                        android.widget.Toast.makeText(context, "Loading Ad...", android.widget.Toast.LENGTH_SHORT).show()
+                        com.nexiplay.app.data.util.AdManager.showRewardedAd(
+                            context = context,
+                            onRewarded = {
+                                submitRequestNow(false)
+                            },
+                            onFailed = {
+                                loading = false
+                                android.widget.Toast.makeText(context, "Failed to load Ad", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
                 },
                 enabled = !loading && title.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = NexiRed),
@@ -196,7 +210,11 @@ fun RequestContentScreen(navController: NavController) {
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
                 if (loading) CircularProgressIndicator(color = themeTextPrimary(), modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Text("Submit Request", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                else Text(
+                    if (hasPriorityPass) "⚡ Submit Priority Request (No Ad)" else "Submit Request",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
             }
         }
     }

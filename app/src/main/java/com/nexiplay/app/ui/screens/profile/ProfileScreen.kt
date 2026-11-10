@@ -73,7 +73,9 @@ fun ProfileScreen(navController: NavController) {
     var streamedCount by remember { mutableIntStateOf(0) }
     var totalWatchSeconds by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    val badgeTick by com.nexiplay.app.data.util.AdManager.badgeUpdateTick.collectAsState()
+
+    LaunchedEffect(Unit, badgeTick) {
         // Check leaderboard toggle in app_settings
         try {
             val json = SupabaseClient.main.from("app_settings")
@@ -87,6 +89,7 @@ fun ProfileScreen(navController: NavController) {
             e.printStackTrace()
         }
 
+        try { SupabaseClient.main.auth.awaitInitialization() } catch (_: Exception) {}
         val user = SupabaseClient.main.auth.currentUserOrNull()
         isLoggedIn = user != null
         if (user != null) {
@@ -95,7 +98,7 @@ fun ProfileScreen(navController: NavController) {
                     .select(Columns.list(
                         "id", "email", "display_name", "avatar_url",
                         "whatsapp_number", "hide_nsfw", "referral_code",
-                        "vip_badge", "vip_badge_expires", "ad_free_until"
+                        "vip_badge", "vip_badge_expires", "ad_free_until", "double_boost_until"
                     )) { filter { eq("id", user.id) } }
                     .decodeSingleOrNull<UserProfile>()
                 
@@ -104,7 +107,7 @@ fun ProfileScreen(navController: NavController) {
                 val metaAvatar = meta?.get("avatar_url")?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.contentOrNull else null }
                 val metaWhatsapp = meta?.get("whatsapp_number")?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.contentOrNull else null }
 
-                profile = p?.copy(
+                val resolvedProfile = p?.copy(
                     displayName = metaName ?: p.displayName,
                     avatarUrl = metaAvatar ?: p.avatarUrl,
                     whatsappNumber = metaWhatsapp ?: p.whatsappNumber
@@ -114,6 +117,16 @@ fun ProfileScreen(navController: NavController) {
                     displayName = metaName,
                     avatarUrl = metaAvatar,
                     whatsappNumber = metaWhatsapp
+                )
+                profile = resolvedProfile
+
+                // Sync VIP / Elite / Ad-Free / 2x Boost status with AdManager
+                com.nexiplay.app.data.util.AdManager.syncProfilePerks(
+                    context = context,
+                    vipBadge = resolvedProfile.vipBadge,
+                    vipBadgeExpires = resolvedProfile.vipBadgeExpires,
+                    adFreeUntil = resolvedProfile.adFreeUntil,
+                    doubleBoostUntilStr = resolvedProfile.doubleBoostUntil
                 )
             } catch (e: Exception) { 
                 e.printStackTrace()
@@ -547,17 +560,24 @@ fun ProfileScreen(navController: NavController) {
 // ── Elite Profile Header (pixel-perfect match to HTML reference) ──
 @Composable
 private fun EliteProfileHeader(profile: UserProfile?, onEditAvatar: () -> Unit, onEditName: () -> Unit, isUploading: Boolean) {
-    val isBadgeActive = remember(profile?.vipBadgeExpires) {
-        val expStr = profile?.vipBadgeExpires
+    val badgeTick by com.nexiplay.app.data.util.AdManager.badgeUpdateTick.collectAsState()
+    val rawBadge = remember(profile?.vipBadge, badgeTick) {
+        val candidate = profile?.vipBadge?.takeIf { it.isNotBlank() }
+            ?: com.nexiplay.app.data.util.AdManager.userBadgeType
+        candidate.trim().lowercase()
+    }
+    val isBadgeActive = remember(profile?.vipBadgeExpires, badgeTick) {
+        val expStr = profile?.vipBadgeExpires?.takeIf { it.isNotBlank() }
+            ?: com.nexiplay.app.data.util.AdManager.badgeExpiresAt
         if (expStr.isNullOrBlank()) true
         else {
             val exp = com.nexiplay.app.data.util.AdManager.parseDateRobust(expStr)
             exp == null || exp.isAfter(java.time.Instant.now())
         }
     }
-    val activeBadge = if (isBadgeActive) profile?.vipBadge else null
-    val isElite = activeBadge == "gold_vip" || activeBadge == "elite_pro"
-    val isVip = isElite || activeBadge == "vip"
+    val activeBadge = if (isBadgeActive) rawBadge else ""
+    val isElite = activeBadge.contains("elite") || activeBadge == "gold_vip"
+    val isVip = isElite || activeBadge.contains("vip")
 
     val infiniteTransition = rememberInfiniteTransition(label = "vip_anim")
 

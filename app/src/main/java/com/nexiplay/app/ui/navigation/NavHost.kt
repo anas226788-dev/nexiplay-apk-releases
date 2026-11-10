@@ -201,9 +201,14 @@ fun NexiPlayNavHost(
             onDismiss = { showUpsellPopup = false },
             onConfirmAction = { action ->
                 showUpsellPopup = false
-                if (action == "coins" || action.isBlank()) {
+                val cleanAction = action.trim().lowercase()
+                if (cleanAction.isBlank() || cleanAction == "coins" || cleanAction == "buy_vip" || cleanAction == "vip" || cleanAction == "elite" || cleanAction == "shop") {
                     navController.navigate(Screen.Coins.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
                         launchSingleTop = true
+                        restoreState = true
                     }
                 } else {
                     NotificationRouter.open(link = action)

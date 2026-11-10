@@ -193,34 +193,47 @@ fun CommentSection(movieId: String) {
                                         settings.commentCountInWindow += 1
                                         settings.lastCommentTimeMs = now
 
-                                        // Award 1 Coin
+                                        // Award 1 Coin (or 2 Coins when 2x Boost / Elite Pro is active)
                                         try {
-                                            val balanceList = SupabaseClient.main.from("coin_balances").select {
+                                            val isBoosted = com.nexiplay.app.data.util.AdManager.isDoubleCoinBoostActive(context)
+                                            val rewardCoins = if (isBoosted) 2 else 1
+                                            val existingBal = SupabaseClient.main.from("coin_balances").select {
                                                 filter { eq("user_id", user.id) }
-                                            }.decodeList<CoinBalance>()
-                                            
-                                            val currentBal = balanceList.firstOrNull()?.balance ?: 0
-                                            val currentEarned = balanceList.firstOrNull()?.totalEarned ?: 0
-                                            val currentSpent = balanceList.firstOrNull()?.totalSpent ?: 0
+                                            }.decodeSingleOrNull<CoinBalance>()
 
-                                            val balanceJson = buildJsonObject {
-                                                put("user_id", JsonPrimitive(user.id))
-                                                put("balance", JsonPrimitive(currentBal + 1))
-                                                put("total_earned", JsonPrimitive(currentEarned + 1))
-                                                put("total_spent", JsonPrimitive(currentSpent))
+                                            val currentBal = existingBal?.balance ?: 0
+                                            val currentEarned = existingBal?.totalEarned ?: 0
+                                            val currentSpent = existingBal?.totalSpent ?: 0
+
+                                            if (existingBal == null) {
+                                                val insertJson = buildJsonObject {
+                                                    put("user_id", JsonPrimitive(user.id))
+                                                    put("balance", JsonPrimitive(rewardCoins))
+                                                    put("total_earned", JsonPrimitive(rewardCoins))
+                                                    put("total_spent", JsonPrimitive(0))
+                                                }
+                                                SupabaseClient.main.from("coin_balances").insert(insertJson)
+                                            } else {
+                                                val balanceJson = buildJsonObject {
+                                                    put("balance", JsonPrimitive(currentBal + rewardCoins))
+                                                    put("total_earned", JsonPrimitive(currentEarned + rewardCoins))
+                                                    put("total_spent", JsonPrimitive(currentSpent))
+                                                }
+                                                SupabaseClient.main.from("coin_balances").update(balanceJson) {
+                                                    filter { eq("user_id", user.id) }
+                                                }
                                             }
-                                            SupabaseClient.main.from("coin_balances").upsert(balanceJson)
-                                            
+
                                             // Add Transaction
                                             val transaction = CoinTransaction(
                                                 userId = user.id,
-                                                amount = 1,
+                                                amount = rewardCoins,
                                                 type = "EARN",
-                                                description = "Earned 1 coin for commenting"
+                                                description = if (isBoosted) "Earned $rewardCoins coins for commenting (2x Boost!)" else "Earned 1 coin for commenting"
                                             )
                                             SupabaseClient.main.from("coin_transactions").insert(transaction)
-                                            
-                                            Toast.makeText(context, "Comment posted! +1 Coin", Toast.LENGTH_SHORT).show()
+
+                                            Toast.makeText(context, "Comment posted! +$rewardCoins ${if (rewardCoins > 1) "Coins (2x!)" else "Coin"}", Toast.LENGTH_SHORT).show()
                                         } catch (e: Exception) {
                                             // Ignore coin failure quietly
                                             Toast.makeText(context, "Comment posted!", Toast.LENGTH_SHORT).show()

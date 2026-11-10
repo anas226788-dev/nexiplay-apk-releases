@@ -320,6 +320,8 @@ data class CoinStreak(
     @SerialName("longest_streak") val longestStreak: Int = 0,
     @SerialName("last_login_date") val lastLoginDate: String? = null,
     @SerialName("last_daily_claim") val lastDailyClaim: String? = null,
+    @SerialName("streak_7_claimed_at") val streak7ClaimedAt: String? = null,
+    @SerialName("streak_30_claimed_at") val streak30ClaimedAt: String? = null,
 )
 
 @Serializable
@@ -335,6 +337,8 @@ data class UserProfile(
     @SerialName("vip_badge") val vipBadge: String? = null,
     @SerialName("vip_badge_expires") val vipBadgeExpires: String? = null,
     @SerialName("ad_free_until") val adFreeUntil: String? = null,
+    @SerialName("double_boost_until") val doubleBoostUntil: String? = null,
+    @SerialName("early_access_until") val earlyAccessUntil: String? = null,
 )
 
 @Serializable

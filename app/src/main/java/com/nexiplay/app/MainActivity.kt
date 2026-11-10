@@ -86,26 +86,17 @@ class MainActivity : ComponentActivity() {
                 
                 try {
                     val p = SupabaseClient.main.from("profiles")
-                        .select(Columns.list("id", "ad_free_until", "vip_badge", "vip_badge_expires")) { filter { eq("id", uid) } }
+                        .select(Columns.list("id", "ad_free_until", "vip_badge", "vip_badge_expires", "double_boost_until")) { filter { eq("id", uid) } }
                         .decodeSingleOrNull<UserProfile>()
                     
                     if (p != null) {
-                        val adFreeInstant = com.nexiplay.app.data.util.AdManager.parseDateRobust(p.adFreeUntil)
-                        val badgeInstant = com.nexiplay.app.data.util.AdManager.parseDateRobust(p.vipBadgeExpires)
-                        
-                        val latestExpiry = when {
-                            adFreeInstant != null && badgeInstant != null -> {
-                                if (adFreeInstant.isAfter(badgeInstant)) p.adFreeUntil else p.vipBadgeExpires
-                            }
-                            adFreeInstant != null -> p.adFreeUntil
-                            badgeInstant != null -> p.vipBadgeExpires
-                            else -> null
-                        }
-                        
-                        com.nexiplay.app.data.util.AdManager.userBadgeType = p.vipBadge?.trim().orEmpty()
-                        com.nexiplay.app.data.util.AdManager.badgeExpiresAt = p.vipBadgeExpires
-                        
-                        com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(this@MainActivity, latestExpiry)
+                        com.nexiplay.app.data.util.AdManager.syncProfilePerks(
+                            context = this@MainActivity,
+                            vipBadge = p.vipBadge,
+                            vipBadgeExpires = p.vipBadgeExpires,
+                            adFreeUntil = p.adFreeUntil,
+                            doubleBoostUntilStr = p.doubleBoostUntil
+                        )
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()

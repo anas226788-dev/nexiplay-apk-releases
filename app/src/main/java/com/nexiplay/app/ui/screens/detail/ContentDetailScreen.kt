@@ -3273,6 +3273,7 @@ private fun trackDownload(
     seasonNumber: Int? = null,
     episodeNumber: Int? = null
 ) {
+    com.nexiplay.app.data.util.CoinRewardHelper.recordDownload(context)
     val user = SupabaseClient.main.auth.currentUserOrNull() ?: return
     kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         try {
@@ -3295,8 +3296,9 @@ private fun trackDownload(
                     source = "android_app"
                 )
             )
+            // Download coin reward recorded above
             SupabaseClient.main.from("user_events").insert(event)
-            com.nexiplay.app.data.util.CoinRewardHelper.recordDownload(context)
+            // Download coin reward recorded above
         } catch (e: Exception) {
             e.printStackTrace()
         }
