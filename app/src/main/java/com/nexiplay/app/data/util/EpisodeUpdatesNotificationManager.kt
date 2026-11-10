@@ -16,6 +16,7 @@ import com.nexiplay.app.R
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.Notice
+import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.UpdateItem
 import com.nexiplay.app.data.models.Notification
 import io.github.jan.supabase.auth.auth
@@ -42,6 +43,7 @@ object EpisodeUpdatesNotificationManager {
 
     private const val PREFS_NAME = "nexiplay_updates_notifier_v2"
     private const val KEY_INITIALIZED = "notifier_initialized_v2"
+    private const val KEY_EPISODES_SEEDED_V3 = "notifier_episodes_seeded_v3"
     private const val KEY_NOTIFIED_UPDATE_IDS = "notified_update_ids"
     private const val KEY_NOTIFIED_MOVIE_IDS = "notified_movie_ids"
     private const val KEY_NOTIFIED_DB_NOTIF_IDS = "notified_db_notif_ids"
@@ -159,6 +161,17 @@ object EpisodeUpdatesNotificationManager {
                     }.getOrDefault(emptyList())
                 }
 
+                val recentEpisodesDef = async {
+                    runCatching {
+                        db.from("episodes").select(
+                            Columns.raw("id, episode_number, created_at, seasons!inner(season_number, movie_id, movies!inner(id, title, slug, poster_url, type, is_adult))")
+                        ) {
+                            order("created_at", Order.DESCENDING)
+                            limit(25)
+                        }.decodeList<RecentEpisodeRow>()
+                    }.getOrDefault(emptyList())
+                }
+
                 val runningDef = async {
                     runCatching {
                         db.from("movies").select(
@@ -219,9 +232,14 @@ object EpisodeUpdatesNotificationManager {
                     }.getOrDefault(emptyList())
                 }
 
+                val episodeUpdates = recentEpisodesDef.await().mapNotNull { it.toUpdateItem() }
+                val mergedUpdates = (episodeUpdates + updatesDef.await())
+                    .sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
+                    .distinctBy { buildUpdateTrackingKey(it) }
+
                 processUpdateAndRunningCatalog(
                     context = context,
-                    updates = updatesDef.await(),
+                    updates = mergedUpdates,
                     runningMovies = runningDef.await(),
                     latestMovies = latestMoviesDef.await(),
                     dbNotifications = dbNotifsDef.await(),
@@ -235,6 +253,14 @@ object EpisodeUpdatesNotificationManager {
         }
     }
 
+    private fun buildUpdateTrackingKey(item: UpdateItem): String {
+        val slugKey = cleanContentSlug(item.slug).lowercase().ifBlank { item.id }
+        val uType = item.updateType?.trim()?.lowercase() ?: "episode"
+        val sNum = item.seasonNumber ?: 0
+        val eNum = item.episodeNumber ?: 0
+        return "${slugKey}_${uType}_s${sNum}_e${eNum}"
+    }
+
     private suspend fun processUpdateAndRunningCatalog(
         context: Context,
         updates: List<UpdateItem>,
@@ -245,6 +271,7 @@ object EpisodeUpdatesNotificationManager {
     ) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val isInitialized = prefs.getBoolean(KEY_INITIALIZED, false)
+        val isEpisodesSeededV3 = prefs.getBoolean(KEY_EPISODES_SEEDED_V3, false)
 
         val notifiedUpdateIds = prefs.getStringSet(KEY_NOTIFIED_UPDATE_IDS, emptySet()).orEmpty().toMutableSet()
         val notifiedMovieIds = prefs.getStringSet(KEY_NOTIFIED_MOVIE_IDS, emptySet()).orEmpty().toMutableSet()
@@ -258,7 +285,10 @@ object EpisodeUpdatesNotificationManager {
         // First launch: seed existing catalog IDs so we don't spam 50 old notifications,
         // and showcase the #1 latest active episode/release update immediately!
         if (!isInitialized) {
-            updates.forEach { if (it.id.isNotBlank()) notifiedUpdateIds.add(it.id) }
+            updates.forEach {
+                if (it.id.isNotBlank()) notifiedUpdateIds.add(it.id)
+                notifiedUpdateIds.add(buildUpdateTrackingKey(it))
+            }
             latestMovies.forEach { if (it.id.isNotBlank()) notifiedMovieIds.add(it.id) }
             runningMovies.forEach { m ->
                 if (m.id.isNotBlank()) {
@@ -282,6 +312,7 @@ object EpisodeUpdatesNotificationManager {
 
             prefs.edit()
                 .putBoolean(KEY_INITIALIZED, true)
+                .putBoolean(KEY_EPISODES_SEEDED_V3, true)
                 .putStringSet(KEY_NOTIFIED_UPDATE_IDS, notifiedUpdateIds)
                 .putStringSet(KEY_NOTIFIED_MOVIE_IDS, notifiedMovieIds)
                 .putStringSet(KEY_NOTIFIED_DB_NOTIF_IDS, notifiedDbNotifIds)
@@ -290,18 +321,51 @@ object EpisodeUpdatesNotificationManager {
             return
         }
 
+        // One-time migration for existing installs upgrading to live `episodes` table tracking:
+        // notify the #1 newest episode if unseen, and seed older historical episode keys
+        if (!isEpisodesSeededV3 && updates.isNotEmpty()) {
+            val newest = updates.first()
+            val newestKey = buildUpdateTrackingKey(newest)
+            if (newestKey !in notifiedUpdateIds && newest.id !in notifiedUpdateIds) {
+                dispatchUpdateNotification(context, newest, posterLookup)
+            }
+            updates.forEach {
+                if (it.id.isNotBlank()) notifiedUpdateIds.add(it.id)
+                notifiedUpdateIds.add(buildUpdateTrackingKey(it))
+            }
+            prefs.edit()
+                .putBoolean(KEY_EPISODES_SEEDED_V3, true)
+                .putStringSet(KEY_NOTIFIED_UPDATE_IDS, notifiedUpdateIds)
+                .apply()
+        }
+
         val newlyNotifiedSlugs = mutableSetOf<String>()
 
-        // 1. Process ALL new `updates` (Episodes, Seasons, Movies, Anime, Series)
-        val newUpdates = updates.filter { it.id.isNotBlank() && it.id !in notifiedUpdateIds }
+        // 1. Process ALL new `updates` & `episodes` (tracked by composite content+season+episode key)
+        val newUpdates = updates.filter { item ->
+            if (item.id.isBlank()) return@filter false
+            val trackingKey = buildUpdateTrackingKey(item)
+            val isEpisodeOrSeason = item.updateType.equals("episode", ignoreCase = true) ||
+                item.updateType.equals("season", ignoreCase = true) ||
+                item.episodeNumber != null
+            if (isEpisodeOrSeason) {
+                trackingKey !in notifiedUpdateIds
+            } else {
+                trackingKey !in notifiedUpdateIds && item.id !in notifiedUpdateIds
+            }
+        }
         for (item in newUpdates.take(4)) {
             val cleanSlug = cleanContentSlug(item.slug)
             if (cleanSlug.isNotBlank()) newlyNotifiedSlugs.add(cleanSlug.lowercase())
             dispatchUpdateNotification(context, item, posterLookup)
             notifiedUpdateIds.add(item.id)
+            notifiedUpdateIds.add(buildUpdateTrackingKey(item))
         }
         // Mark any remaining batch updates as seen
-        newUpdates.forEach { notifiedUpdateIds.add(it.id) }
+        newUpdates.forEach {
+            notifiedUpdateIds.add(it.id)
+            notifiedUpdateIds.add(buildUpdateTrackingKey(it))
+        }
 
         // 2. Process Running Content new episodes (`movies` where `is_running == true`)
         for (movie in runningMovies) {
@@ -407,7 +471,7 @@ object EpisodeUpdatesNotificationManager {
 
         sendRichContentNotification(
             context = context,
-            notificationId = ("upd_${item.id}".hashCode() and 0x7FFFFFFF),
+            notificationId = ("upd_${buildUpdateTrackingKey(item)}".hashCode() and 0x7FFFFFFF),
             channelId = channelId,
             subText = subText,
             title = title,

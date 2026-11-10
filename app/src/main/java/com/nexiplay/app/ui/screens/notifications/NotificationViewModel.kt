@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.Notice
+import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.UpdateItem
 import com.nexiplay.app.data.models.Notification
 import com.nexiplay.app.data.util.EpisodeUpdatesNotificationManager
@@ -77,13 +78,34 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
 
                     val updatesDeferred = async {
                         runCatching {
-                            SupabaseClient.main.from("updates")
-                                .select {
-                                    filter { eq("is_active", true) }
-                                    order("updated_at", Order.DESCENDING)
-                                    limit(40)
+                            val tableUpdates = runCatching {
+                                SupabaseClient.main.from("updates")
+                                    .select {
+                                        filter { eq("is_active", true) }
+                                        order("updated_at", Order.DESCENDING)
+                                        limit(40)
+                                    }
+                                    .decodeList<UpdateItem>()
+                            }.getOrDefault(emptyList())
+
+                            val recentEpisodes = runCatching {
+                                SupabaseClient.main.from("episodes")
+                                    .select(
+                                        Columns.raw("id, episode_number, created_at, seasons!inner(season_number, movie_id, movies!inner(id, title, slug, poster_url, type, is_adult))")
+                                    ) {
+                                        order("created_at", Order.DESCENDING)
+                                        limit(25)
+                                    }
+                                    .decodeList<RecentEpisodeRow>()
+                                    .mapNotNull { it.toUpdateItem() }
+                            }.getOrDefault(emptyList())
+
+                            (recentEpisodes + tableUpdates)
+                                .sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
+                                .distinctBy {
+                                    val cleanSlug = it.slug.trim().removePrefix("/").substringAfterLast("/").lowercase()
+                                    "${cleanSlug}_${it.updateType}_${it.seasonNumber ?: 0}_${it.episodeNumber ?: 0}"
                                 }
-                                .decodeList<UpdateItem>()
                         }
                     }
 

@@ -433,6 +433,10 @@ internal fun resolveStreamHttpHeaders(streamUrl: String): Map<String, String> {
             "Referer" to "https://toonstream.vip/",
             "Origin" to "https://toonstream.vip"
         )
+        lower.contains("vidmoly") || lower.contains("vmpx.online") -> mapOf(
+            "Referer" to "https://vidmoly.net/",
+            "Origin" to "https://vidmoly.net"
+        )
         else -> mapOf(
             "Referer" to "https://nexiplay.vercel.app/",
             "Origin" to "https://nexiplay.vercel.app"
@@ -601,9 +605,16 @@ fun WatchScreen(
         val lowerUrl = rawUrl.lowercase()
         val effectiveType = state.resolvedType.ifBlank { type }
 
-        val seasonEps = state.seasons.getOrNull(selectedSeasonIdx)?.let { state.episodes[it.id] }.orEmpty()
+        val targetSeasonForEp = state.seasons.firstOrNull { it.seasonNumber == sNum }
+            ?: state.seasons.getOrNull(selectedSeasonIdx)
+        val seasonEps = targetSeasonForEp?.let { state.episodes[it.id] }.orEmpty().sortedBy { it.episodeNumber }
+        val minEpInSeason = seasonEps.firstOrNull()?.episodeNumber ?: 1
         val idxInSeason = seasonEps.indexOfFirst { it.episodeNumber == eNum }
-        val relativeEpNum = if (idxInSeason >= 0) idxInSeason + 1 else eNum
+        val relativeEpNum = when {
+            minEpInSeason > 1 && eNum >= minEpInSeason -> eNum - minEpInSeason + 1
+            idxInSeason >= 0 -> idxInSeason + 1
+            else -> eNum
+        }
 
         val needsWrapperResolution = server.id == "rareanimes" ||
             server.id == "animekhor" ||
@@ -700,15 +711,10 @@ fun WatchScreen(
             resolveStatusText = "Connecting to Nexiplay Stream..."
             resolveJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val fallbackCandidates = buildList {
-                    val rawMulti = state.streamingRow?.multiScraperConfig?.takeIf { it.isNotBlank() }
-                        ?: if (state.movie?.scraperSource == "multi") state.movie?.scraperUrl else null
-                    if (!rawMulti.isNullOrBlank()) {
-                        val seasonRegex = Regex("\"$sNum\"\\s*:\\s*\"(https?://[^\"]+)\"")
-                        seasonRegex.find(rawMulti)?.groupValues?.getOrNull(1)?.let { add(it) }
-                    }
-                    state.movie?.scraperUrl?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("{") }?.let { add(it) }
-                    if (!rawMulti.isNullOrBlank()) {
-                        Regex("""https?://[^\s"'\\}]+""").findAll(rawMulti).forEach { m ->
+                    // 1. Current episode's own streaming_url (never include other episodes' /embed/ URLs!)
+                    val currEpRaw = selectedEpisode?.streamingUrl?.trim().orEmpty()
+                    if (currEpRaw.isNotEmpty()) {
+                        Regex("""https?://[^\s"'\\}]+""").findAll(currEpRaw).forEach { m ->
                             val u = m.value.trim()
                             if (u.contains("rareanimes", ignoreCase = true) ||
                                 u.contains("codedew", ignoreCase = true) ||
@@ -719,24 +725,44 @@ fun WatchScreen(
                             }
                         }
                     }
-                    state.episodes.values.flatten().forEach { epItem ->
-                        val epRaw = epItem.streamingUrl?.trim().orEmpty()
-                        if (epRaw.contains("rareanimes", ignoreCase = true) ||
-                            epRaw.contains("codedew", ignoreCase = true) ||
-                            epRaw.contains("razorshell", ignoreCase = true)
-                        ) {
-                            Regex("""https?://[^\s"'\\}]+""").findAll(epRaw).forEach { m ->
-                                val u = m.value.trim()
-                                if (u.contains("rareanimes", ignoreCase = true) ||
-                                    u.contains("codedew", ignoreCase = true) ||
-                                    u.contains("razorshell", ignoreCase = true) ||
-                                    u.contains("/zipper/", ignoreCase = true)
-                                ) {
-                                    add(u)
-                                }
+
+                    val rawMulti = state.streamingRow?.multiScraperConfig?.takeIf { it.isNotBlank() }
+                        ?: if (state.movie?.scraperSource == "multi") state.movie?.scraperUrl else null
+                    if (!rawMulti.isNullOrBlank()) {
+                        val paddedS = sNum.toString().padStart(2, '0')
+                        val seasonRegex = Regex("\"(?:$sNum|$paddedS)\"\\s*:\\s*\"(https?://[^\"]+)\"")
+                        seasonRegex.find(rawMulti)?.groupValues?.getOrNull(1)?.let { add(it) }
+                    }
+
+                    val rawPostUrls = mutableListOf<String>()
+                    state.movie?.scraperUrl?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("{") }?.let { rawPostUrls.add(it) }
+                    if (!rawMulti.isNullOrBlank()) {
+                        Regex("""https?://[^\s"'\\}]+""").findAll(rawMulti).forEach { m ->
+                            val u = m.value.trim()
+                            if (u.contains("rareanimes", ignoreCase = true) ||
+                                u.contains("raretoons", ignoreCase = true) ||
+                                u.contains("codedew", ignoreCase = true) ||
+                                u.contains("/zipper/", ignoreCase = true)
+                            ) {
+                                rawPostUrls.add(u)
                             }
                         }
                     }
+
+                    // Rewrite any RareAnimes post URL that points to a different season (e.g. season-17 -> season-18) first!
+                    val urlSeasonRegex = Regex("""season-0*(\d+)\b""", RegexOption.IGNORE_CASE)
+                    for (u in rawPostUrls) {
+                        val m = urlSeasonRegex.find(u)
+                        val parsedS = m?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        if (parsedS != null && parsedS != sNum) {
+                            add(u.replace(urlSeasonRegex, "season-$sNum"))
+                            val paddedS = sNum.toString().padStart(2, '0')
+                            if (paddedS != sNum.toString()) {
+                                add(u.replace(urlSeasonRegex, "season-$paddedS"))
+                            }
+                        }
+                    }
+                    addAll(rawPostUrls)
                 }.distinct()
 
                 val streamData = com.nexiplay.app.data.repository.WebFeaturesRepository.resolveRRStream(
@@ -796,6 +822,7 @@ fun WatchScreen(
                     val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() }
                     if (playback != null || embed != null) {
                         val streamToPlay = playback ?: embed!!
+                        fallbackWebEmbedUrl = embed?.takeIf { it != playback }?.let { normalizeWebPlayerUrl(it) }
                         selectedServerUrl = normalizeWebPlayerUrl(streamToPlay)
                     } else if (rawUrl.isNotBlank() && !rawUrl.startsWith("desidub:") && !rawUrl.contains("desidubanime.me") && !rawUrl.contains("/embed/desidub")) {
                         selectedServerUrl = normalizeWebPlayerUrl(rawUrl)

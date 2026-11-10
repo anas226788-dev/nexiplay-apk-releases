@@ -207,6 +207,7 @@ data class Upcoming(
 @Serializable
 data class UpdateItem(
     val id: String = "",
+    @SerialName("content_id") val contentId: String? = null,
     val title: String = "",
     val slug: String = "",
     @SerialName("poster_url") val posterUrl: String? = null,
@@ -218,6 +219,54 @@ data class UpdateItem(
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
 )
+
+@Serializable
+data class RecentEpisodeMovieInfo(
+    val id: String = "",
+    val title: String = "",
+    val slug: String = "",
+    @SerialName("poster_url") val posterUrl: String? = null,
+    val type: String = "anime",
+    @SerialName("is_adult") val isAdult: Boolean? = false,
+)
+
+@Serializable
+data class RecentEpisodeSeasonInfo(
+    @SerialName("season_number") val seasonNumber: Int = 1,
+    @SerialName("movie_id") val movieId: String = "",
+    val movies: RecentEpisodeMovieInfo? = null,
+)
+
+@Serializable
+data class RecentEpisodeRow(
+    val id: String = "",
+    @SerialName("episode_number") val episodeNumber: Int = 1,
+    @SerialName("created_at") val createdAt: String? = null,
+    val seasons: RecentEpisodeSeasonInfo? = null,
+) {
+    fun toUpdateItem(hideNsfw: Boolean = false): UpdateItem? {
+        val season = seasons ?: return null
+        val movie = season.movies ?: return null
+        if (hideNsfw && movie.isAdult == true) return null
+        if (movie.id.isBlank() || movie.title.isBlank() || movie.slug.isBlank()) return null
+        val cleanType = movie.type.trim().lowercase().ifBlank { "anime" }
+        val cleanSlug = movie.slug.trim().removePrefix("/").substringAfterLast("/")
+        return UpdateItem(
+            id = "ep_$id",
+            contentId = movie.id,
+            title = movie.title,
+            slug = "/$cleanType/$cleanSlug",
+            posterUrl = movie.posterUrl,
+            contentType = cleanType,
+            updateType = "episode",
+            seasonNumber = season.seasonNumber,
+            episodeNumber = episodeNumber,
+            isActive = true,
+            createdAt = createdAt,
+            updatedAt = createdAt,
+        )
+    }
+}
 
 @Serializable
 data class Novel(

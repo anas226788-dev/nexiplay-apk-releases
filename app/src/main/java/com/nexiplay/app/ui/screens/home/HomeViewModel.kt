@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.nexiplay.app.data.SupabaseClient
 import com.nexiplay.app.data.model.Category
 import com.nexiplay.app.data.model.Movie
+import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.Upcoming
 import com.nexiplay.app.data.model.UpdateItem
 import com.nexiplay.app.data.repository.TmdbRepository
@@ -166,7 +167,7 @@ class HomeViewModel : ViewModel() {
                                 db.from("updates").select {
                                     filter { eq("is_active", true) }
                                     order("updated_at", Order.DESCENDING)
-                                    limit(16)
+                                    limit(20)
                                 }.decodeList<UpdateItem>()
                             } catch (_: Exception) {
                                 emptyList()
@@ -176,11 +177,24 @@ class HomeViewModel : ViewModel() {
                             } else {
                                 db.from("updates").select {
                                     order("created_at", Order.DESCENDING)
-                                    limit(16)
+                                    limit(20)
                                 }.decodeList<UpdateItem>()
                             }
                         } catch (_: Exception) {
                             if (isRefresh) _state.value.updates else emptyList()
+                        }
+                    }
+
+                    val recentEpisodesDef = async(Dispatchers.IO) {
+                        try {
+                            db.from("episodes").select(
+                                Columns.raw("id, episode_number, created_at, seasons!inner(season_number, movie_id, movies!inner(id, title, slug, poster_url, type, is_adult))")
+                            ) {
+                                order("created_at", Order.DESCENDING)
+                                limit(25)
+                            }.decodeList<RecentEpisodeRow>()
+                        } catch (_: Exception) {
+                            emptyList()
                         }
                     }
 
@@ -288,11 +302,12 @@ class HomeViewModel : ViewModel() {
                         .distinctBy { it.id }
                         .take(16)
 
-                    // Latest Updates: Keep exact chronological order (never shuffle!) + enrich missing posters
+                    // Latest Updates: Keep exact chronological order (never shuffle!) + merge live episode additions + enrich missing posters
                     val posterBySlug = allLocal.associate {
                         it.slug.lowercase() to it.posterUrl
                     }
-                    val fetchedUpdates = updatesDef.await().map { u ->
+                    val episodeUpdateItems = recentEpisodesDef.await().mapNotNull { it.toUpdateItem(hideNsfw) }
+                    val tableUpdateItems = updatesDef.await().map { u ->
                         if (!u.posterUrl.isNullOrBlank()) u
                         else {
                             val cleanSlug = u.slug.trim().removePrefix("/").substringAfterLast("/").lowercase()
@@ -301,18 +316,30 @@ class HomeViewModel : ViewModel() {
                         }
                     }
 
-                    val rawUpdates = if (fetchedUpdates.size >= 4) {
-                        fetchedUpdates
-                    } else {
-                        val existingUpdateSlugs = fetchedUpdates.mapTo(HashSet()) {
-                            it.slug.trim().removePrefix("/").substringAfterLast("/").lowercase()
+                    val combinedUpdates = (episodeUpdateItems + tableUpdateItems)
+                        .sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
+
+                    val seenContentSlugs = HashSet<String>()
+                    val deduplicatedUpdates = buildList {
+                        for (item in combinedUpdates) {
+                            val cleanSlug = item.slug.trim().removePrefix("/").substringAfterLast("/").lowercase()
+                            val key = cleanSlug.ifBlank { item.contentId ?: item.id }
+                            if (key.isBlank() || !seenContentSlugs.add(key)) continue
+                            add(item)
+                            if (size >= 16) break
                         }
+                    }
+
+                    val rawUpdates = if (deduplicatedUpdates.size >= 10) {
+                        deduplicatedUpdates
+                    } else {
                         val supplemental = dbLatest
-                            .filter { it.slug.lowercase() !in existingUpdateSlugs }
-                            .take(10 - fetchedUpdates.size)
+                            .filter { it.slug.lowercase() !in seenContentSlugs }
+                            .take(12 - deduplicatedUpdates.size)
                             .map { m ->
                                 UpdateItem(
                                     id = "auto-upd-${m.id}",
+                                    contentId = m.id,
                                     title = m.title,
                                     slug = m.slug,
                                     posterUrl = m.posterUrl,
@@ -321,10 +348,11 @@ class HomeViewModel : ViewModel() {
                                     seasonNumber = if (m.type != "movie") 1 else null,
                                     episodeNumber = m.lastEpisode,
                                     isActive = true,
-                                    createdAt = m.createdAt
+                                    createdAt = m.createdAt,
+                                    updatedAt = m.createdAt
                                 )
                             }
-                        fetchedUpdates + supplemental
+                        (deduplicatedUpdates + supplemental).sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
                     }
 
                     val rawUpcoming = upcomingDef.await()

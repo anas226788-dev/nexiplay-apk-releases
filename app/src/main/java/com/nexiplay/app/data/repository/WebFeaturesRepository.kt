@@ -376,14 +376,28 @@ object WebFeaturesRepository {
             }
 
             val targetUrl = serverMap[serverId] ?: primary
+            val directVidmoly = if (targetUrl.contains("vidmoly", ignoreCase = true)) {
+                extractDirectVidmolyM3u8OnDevice(targetUrl)
+            } else null
 
             DesiDubStreamResult(
                 success = true,
                 title = matchedTitle ?: cleanTitle,
-                playbackUrl = targetUrl,
+                playbackUrl = directVidmoly ?: targetUrl,
                 embedUrl = targetUrl,
                 server = serverId
             )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractDirectVidmolyM3u8OnDevice(vidmolyUrl: String): String? {
+        return try {
+            val clean = if (vidmolyUrl.startsWith("//")) "https:$vidmolyUrl" else vidmolyUrl.trim()
+            val html = httpGetHtml(clean, referer = "https://www.desidubanime.me/", timeoutMs = 5000) ?: return null
+            val m3u8Match = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""", RegexOption.IGNORE_CASE).find(html)
+            m3u8Match?.value?.trim()?.takeIf { it.isNotBlank() }
         } catch (_: Exception) {
             null
         }
@@ -433,11 +447,15 @@ object WebFeaturesRepository {
                     val playback = if (rawPlayback?.startsWith("/") == true) "$BASE_WEB_URL$rawPlayback" else rawPlayback
                     val embed = if (rawEmbed?.startsWith("/") == true) "$BASE_WEB_URL$rawEmbed" else rawEmbed
                     if (playback != null || embed != null) {
+                        val candidateEmbed = embed ?: playback!!
+                        val directVidmoly = if (candidateEmbed.contains("vidmoly", ignoreCase = true)) {
+                            extractDirectVidmolyM3u8OnDevice(candidateEmbed)
+                        } else null
                         val res = DesiDubStreamResult(
                             success = true,
                             title = obj.optString("title").takeIf { it.isNotBlank() } ?: title,
-                            playbackUrl = playback,
-                            embedUrl = embed ?: playback,
+                            playbackUrl = directVidmoly ?: playback,
+                            embedUrl = candidateEmbed,
                             server = serverId
                         )
                         desidubStreamCache[cacheKey] = res
@@ -1310,7 +1328,7 @@ object WebFeaturesRepository {
 
         // 4. PRIORITY 2 (FALLBACK): Local scraper if API had no stream
         onProgress(0.60f, "Checking alternate stream routes...")
-        val livePostUrls = (fallbackUrls + listOf(rawUrl))
+        val basePostUrls = (fallbackUrls + listOf(rawUrl))
             .map { it.trim() }
             .filter { (it.contains("rareanimes.", ignoreCase = true) || it.contains("raretoons.", ignoreCase = true)) &&
                 !it.contains("razorshell", ignoreCase = true) &&
@@ -1318,7 +1336,22 @@ object WebFeaturesRepository {
                 !it.contains("/embed/rr", ignoreCase = true)
             }
             .distinct()
-            .toMutableList()
+
+        val urlSeasonRegex = Regex("""season-0*(\d+)\b""", RegexOption.IGNORE_CASE)
+        val livePostUrls = buildList {
+            for (u in basePostUrls) {
+                val m = urlSeasonRegex.find(u)
+                val parsedS = m?.groupValues?.getOrNull(1)?.toIntOrNull()
+                if (parsedS != null && parsedS != season) {
+                    add(u.replace(urlSeasonRegex, "season-$season"))
+                    val paddedS = season.toString().padStart(2, '0')
+                    if (paddedS != season.toString()) {
+                        add(u.replace(urlSeasonRegex, "season-$paddedS"))
+                    }
+                }
+            }
+            addAll(basePostUrls)
+        }.distinct().toMutableList()
 
         if (livePostUrls.isEmpty() && (title.isNotBlank() || slug.isNotBlank())) {
             val queryTitle = title.ifBlank { slug }
@@ -1360,7 +1393,7 @@ object WebFeaturesRepository {
                                     val res = RRStreamResult(
                                         success = true,
                                         playbackUrl = directM3u8,
-                                        embedUrl = directM3u8,
+                                        embedUrl = liveResolved,
                                         format = "hls_stream"
                                     )
                                     rrStreamCache[cacheKey] = res
@@ -1520,69 +1553,107 @@ object WebFeaturesRepository {
         }
 
         // 1. RareAnimes / RareToons post page -> extract episode's codedew zipper link
+        var matchedExactEpisodeFromPost = false
         if (currentUrl.contains("rareanimes.", ignoreCase = true) ||
             currentUrl.contains("raretoons.", ignoreCase = true)
         ) {
-            try {
-                val postHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
-                if (!postHtml.isNullOrBlank()) {
-                    var matchedZipper: String? = null
-                    val candidateEps = listOf(relativeEpisodeNum, episodeNum).distinct()
-                    for (ep in candidateEps) {
-                        val padded = ep.toString().padStart(2, '0')
-                        val epHeaderRegex = Regex(
-                            """(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b""",
-                            RegexOption.IGNORE_CASE
-                        )
-                        for (headerMatch in epHeaderRegex.findAll(postHtml)) {
-                            val startIdx = headerMatch.range.first
-                            val endIdx = (startIdx + 2800).coerceAtMost(postHtml.length)
-                            val windowHtml = postHtml.substring(startIdx, endIdx)
-                            val picked = pickBestZipperFromHtml(windowHtml)
-                            if (!picked.isNullOrBlank()) {
-                                matchedZipper = picked
+            val postCandidates = buildList {
+                val urlSeasonRegex = Regex("""season-0*(\d+)\b""", RegexOption.IGNORE_CASE)
+                val m = urlSeasonRegex.find(currentUrl)
+                val parsedS = m?.groupValues?.getOrNull(1)?.toIntOrNull()
+                if (parsedS != null && parsedS != seasonNum) {
+                    add(currentUrl.replace(urlSeasonRegex, "season-$seasonNum"))
+                    val paddedS = seasonNum.toString().padStart(2, '0')
+                    if (paddedS != seasonNum.toString()) {
+                        add(currentUrl.replace(urlSeasonRegex, "season-$paddedS"))
+                    }
+                }
+                add(currentUrl)
+            }.distinct()
+
+            val anyEpHeaderRegex = Regex("""(?:Episode|Ep\.?)\s*0*(\d+)\b""", RegexOption.IGNORE_CASE)
+
+            for (candidatePostUrl in postCandidates) {
+                try {
+                    val postHtml = httpGetHtml(candidatePostUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
+                    if (!postHtml.isNullOrBlank()) {
+                        var matchedZipper: String? = null
+                        val candidateEps = listOf(relativeEpisodeNum, episodeNum).distinct()
+                        for (ep in candidateEps) {
+                            val padded = ep.toString().padStart(2, '0')
+                            val epHeaderRegex = Regex(
+                                """(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b""",
+                                RegexOption.IGNORE_CASE
+                            )
+                            for (headerMatch in epHeaderRegex.findAll(postHtml)) {
+                                val startIdx = headerMatch.range.first
+                                val prefix = postHtml.substring((startIdx - 20).coerceAtLeast(0), startIdx).lowercase()
+                                if (prefix.contains("href=") || prefix.contains("url=")) continue
+
+                                val maxEndIdx = (startIdx + 2500).coerceAtMost(postHtml.length)
+                                var endIdx = maxEndIdx
+                                for (nextMatch in anyEpHeaderRegex.findAll(postHtml, headerMatch.range.last + 1)) {
+                                    if (nextMatch.range.first >= maxEndIdx) break
+                                    val nextPrefix = postHtml.substring((nextMatch.range.first - 20).coerceAtLeast(0), nextMatch.range.first).lowercase()
+                                    if (nextPrefix.contains("href=") || nextPrefix.contains("url=")) continue
+                                    val nextEpNum = nextMatch.groupValues.getOrNull(1)?.toIntOrNull()
+                                    if (nextEpNum != null && nextEpNum != ep) {
+                                        endIdx = nextMatch.range.first
+                                        break
+                                    }
+                                }
+
+                                val windowHtml = postHtml.substring(startIdx, endIdx)
+                                val picked = pickBestZipperFromHtml(windowHtml)
+                                if (!picked.isNullOrBlank()) {
+                                    matchedZipper = picked
+                                    matchedExactEpisodeFromPost = true
+                                    break
+                                }
+                            }
+                            if (!matchedZipper.isNullOrBlank()) break
+
+                            val epZipperRegex1 = Regex(
+                                """(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b[\s\S]{1,800}?href=["'](https?://[^"']*zipper/[^"']*)["']""",
+                                RegexOption.IGNORE_CASE
+                            )
+                            val epZipperRegex2 = Regex(
+                                """href=["'](https?://[^"']*zipper/[^"']*)["'][^>]*>[\s\S]{0,160}?(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b""",
+                                RegexOption.IGNORE_CASE
+                            )
+                            val m = epZipperRegex1.find(postHtml) ?: epZipperRegex2.find(postHtml)
+                            if (m != null) {
+                                matchedZipper = m.groupValues[1].replace("&amp;", "&").trim()
+                                matchedExactEpisodeFromPost = true
                                 break
                             }
                         }
-                        if (!matchedZipper.isNullOrBlank()) break
 
-                        val epZipperRegex1 = Regex(
-                            """(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b[\s\S]{1,1000}?href=["'](https?://[^"']*zipper/[^"']*)["']""",
-                            RegexOption.IGNORE_CASE
-                        )
-                        val epZipperRegex2 = Regex(
-                            """href=["'](https?://[^"']*zipper/[^"']*)["'][^>]*>[\s\S]{0,160}?(?:Episode|Ep\.?)\s*(?:0*$ep|$padded)\b""",
-                            RegexOption.IGNORE_CASE
-                        )
-                        val m = epZipperRegex1.find(postHtml) ?: epZipperRegex2.find(postHtml)
-                        if (m != null) {
-                            matchedZipper = m.groupValues[1].replace("&amp;", "&").trim()
+                        if (matchedZipper.isNullOrBlank()) {
+                            matchedZipper = pickBestZipperFromHtml(postHtml)
+                        }
+
+                        if (matchedZipper.isNullOrBlank()) {
+                            val anyZipper = Regex("""href=["'](https?://[^"']*zipper/[^"']*)["']""", RegexOption.IGNORE_CASE)
+                                .find(postHtml)?.groupValues?.getOrNull(1)?.replace("&amp;", "&")?.trim()
+                            if (!anyZipper.isNullOrBlank()) {
+                                matchedZipper = anyZipper
+                            }
+                        }
+
+                        if (!matchedZipper.isNullOrBlank()) {
+                            currentUrl = matchedZipper
                             break
+                        } else {
+                            val directIframes = extractIframesFromHtml(postHtml, candidatePostUrl)
+                            if (directIframes.isNotEmpty()) {
+                                currentUrl = directIframes.first()
+                                break
+                            }
                         }
                     }
-
-                    if (matchedZipper.isNullOrBlank()) {
-                        matchedZipper = pickBestZipperFromHtml(postHtml)
-                    }
-
-                    if (matchedZipper.isNullOrBlank()) {
-                        val anyZipper = Regex("""href=["'](https?://[^"']*zipper/[^"']*)["']""", RegexOption.IGNORE_CASE)
-                            .find(postHtml)?.groupValues?.getOrNull(1)?.replace("&amp;", "&")?.trim()
-                        if (!anyZipper.isNullOrBlank()) {
-                            matchedZipper = anyZipper
-                        }
-                    }
-
-                    if (!matchedZipper.isNullOrBlank()) {
-                        currentUrl = matchedZipper
-                    } else {
-                        val directIframes = extractIframesFromHtml(postHtml, currentUrl)
-                        if (directIframes.isNotEmpty()) {
-                            currentUrl = directIframes.first()
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
+                } catch (_: Exception) {}
+            }
         }
 
         // 2. Codedew Zipper / StreamBeta page -> extract clean player iframe or direct stream URL
@@ -1627,6 +1698,13 @@ object WebFeaturesRepository {
                             return@withContext "https://$baseEmbedHost/embed/${exact.id}"
                         }
                     }
+
+                    // If the zipper link was already picked from the exact episode header on the target season's post,
+                    // its primary iframe IS the exact episode — do not let a wrong season's relatedData entry override it!
+                    if (matchedExactEpisodeFromPost && iframes.isNotEmpty()) {
+                        return@withContext iframes.first()
+                    }
+
                     for (ep in candidateEps) {
                         val anySeason = entries.firstOrNull { it.episode == ep }
                         if (anySeason != null) {
