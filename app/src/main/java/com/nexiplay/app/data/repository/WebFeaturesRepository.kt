@@ -1317,17 +1317,8 @@ object WebFeaturesRepository {
             return@withContext res
         }
 
-        // 3. PRIORITY 1: High-Speed Backend API (Instant HLS resolution)
+        // 3. PRIORITY 1: On-Device Direct Season/Episode Scraper (resolves exact season post & client-IP signed HLS/MKV stream)
         onProgress(0.35f, "Connecting high-speed stream tunnel...")
-        val apiRes = fetchRRStreamApi(id = id, slug = slug, season = season, episode = episode)
-        if (apiRes != null && (!apiRes.playbackUrl.isNullOrBlank() || !apiRes.embedUrl.isNullOrBlank())) {
-            rrStreamCache[cacheKey] = apiRes
-            onProgress(1.0f, "Stream ready, starting player...")
-            return@withContext apiRes
-        }
-
-        // 4. PRIORITY 2 (FALLBACK): Local scraper if API had no stream
-        onProgress(0.60f, "Checking alternate stream routes...")
         val basePostUrls = (fallbackUrls + listOf(rawUrl))
             .map { it.trim() }
             .filter { (it.contains("rareanimes.", ignoreCase = true) || it.contains("raretoons.", ignoreCase = true)) &&
@@ -1417,7 +1408,8 @@ object WebFeaturesRepository {
             } catch (_: Exception) {}
         }
 
-        // 5. Try other candidates
+        // 4. Try other direct/zipper/embed candidates on-device
+        onProgress(0.60f, "Checking alternate stream routes...")
         val otherCandidates = (listOf(rawUrl) + fallbackUrls)
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.contains("/embed/rr", ignoreCase = true) }
@@ -1493,6 +1485,15 @@ object WebFeaturesRepository {
                     return@withContext res
                 }
             } catch (_: Exception) {}
+        }
+
+        // 5. PRIORITY 2 (FALLBACK): Backend API if on-device resolution could not reach upstream
+        onProgress(0.80f, "Connecting backup stream tunnel...")
+        val apiRes = fetchRRStreamApi(id = id, slug = slug, season = season, episode = episode)
+        if (apiRes != null && (!apiRes.playbackUrl.isNullOrBlank() || !apiRes.embedUrl.isNullOrBlank())) {
+            rrStreamCache[cacheKey] = apiRes
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext apiRes
         }
 
         null
