@@ -356,7 +356,7 @@ private val ALLOWED_PLAYER_HOSTS = listOf(
     "bysetayico", "morencius", "hanerix", "filesforever", "iqsmartgames", "strp2p", "rpmstream", "upns.live", "p2pplay", "nuvorel",
     "upcloud", "flixer", "vidnest", "primesrc", "vidspark", "vidstuck", "vidmoly",
     "medmedia", "vidup", "ythd", "soap2day", "soapgate", "streamta.pe",
-    "iamcdn.net", "vibeplayer.site", "takutakutaku.workers.dev", "groovy.monster", "nexiplay.vercel.app"
+    "iamcdn.net", "vibeplayer.site", "takutakutaku.workers.dev", "groovy.monster", "nexiplay.vercel.app", "smashy", "autoembed.me"
 )
 
 private fun isAllowedMainFrameNavigation(targetUrl: String, currentServerUrl: String?): Boolean {
@@ -640,7 +640,38 @@ fun WatchScreen(
                 lowerUrl.contains("aoneroom")) &&
                 !lowerUrl.contains("/embed/") && !lowerUrl.contains("/e/") && !lowerUrl.contains("player"))
 
-        if (rawUrl.startsWith("toonplay://") || (server.id == "toonplay" && effectiveType != "movie" && (rawUrl.startsWith("series-") || rawUrl.startsWith("anime-")))) {
+        if (rawUrl.startsWith("parx://")) {
+            // 100% client-direct cloud stream (CinePro / AnimeSalt / MovieBox / 4KHDHub) — zero DB / zero Vercel load
+            try {
+                webViewRef.value?.stopLoading()
+                webViewRef.value?.tag = "about:blank"
+                webViewRef.value?.loadUrl("about:blank")
+            } catch (_: Exception) {}
+            isResolvingServer = true
+            resolveProgress = 0.25f
+            resolveStatusText = "Fetching direct cloud stream..."
+            val parxProvider = rawUrl.removePrefix("parx://").substringBefore("/")
+            val movieForParx = state.movie
+            val tmdbForParx = state.streamingRow?.tmdbId ?: movieForParx?.tmdbId
+            resolveJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val direct = com.nexiplay.app.data.repository.WebFeaturesRepository.resolveParxDirectStream(
+                    provider = parxProvider,
+                    isTv = effectiveType != "movie",
+                    tmdbId = tmdbForParx,
+                    title = movieForParx?.title.orEmpty(),
+                    season = sNum,
+                    episode = eNum
+                )
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    isResolvingServer = false
+                    if (!direct.isNullOrBlank()) {
+                        selectedServerUrl = direct
+                    } else {
+                        android.widget.Toast.makeText(context, "This cloud server has no stream for this title. Try another server.", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } else if (rawUrl.startsWith("toonplay://") || (server.id == "toonplay" && effectiveType != "movie" && (rawUrl.startsWith("series-") || rawUrl.startsWith("anime-")))) {
             // Keep WebView mounted (never set selectedServerUrl = null while WebView exists) to avoid native Chromium SIGSEGV
             try {
                 webViewRef.value?.stopLoading()

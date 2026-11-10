@@ -3187,6 +3187,80 @@ fun getAvailableServers(
         )
     }
 
+    // 43b. AutoEmbed Pro (Multi-Audio)
+    if (anyTarget != null) {
+        servers.add(
+            StreamServer(
+                id = "autoembed_pro",
+                name = "AutoEmbed Pro (Multi-Audio)",
+                url = if (isSeries) "https://autoembed.me/embed/tv/$anyTarget/$sNum/$eNum" else "https://autoembed.me/embed/movie/$anyTarget",
+                color = Color(0xFFF59E0B),
+                badge = "MULTI-AUDIO",
+                isHindi = true
+            )
+        )
+    }
+
+    // 43c. SmashyStream (Multi-Audio)
+    if (anyTarget != null) {
+        servers.add(
+            StreamServer(
+                id = "smashystream",
+                name = "SmashyStream (Multi-Audio)",
+                url = if (isSeries) "https://player.smashy.stream/tv/$anyTarget?s=$sNum&e=$eNum" else "https://player.smashy.stream/movie/$anyTarget",
+                color = Color(0xFFEA580C),
+                badge = "MULTI-AUDIO",
+                isHindi = true
+            )
+        )
+    }
+
+    // 43d. Client-Direct Cloud Servers (resolved 100% on the phone via parxstream API — zero DB / zero Vercel load)
+    if (tmdbTarget != null) {
+        servers.add(
+            StreamServer(
+                id = "parx_cinepro",
+                name = "CinePro (Direct 1080p HLS)",
+                url = if (isSeries) "parx://cinepro/tv/$tmdbTarget/$sNum/$eNum" else "parx://cinepro/movie/$tmdbTarget",
+                color = Color(0xFF10B981),
+                badge = "DIRECT 1080P",
+                isHindi = false
+            )
+        )
+    }
+    if (movie.type.equals("anime", ignoreCase = true)) {
+        servers.add(
+            StreamServer(
+                id = "parx_animesalt",
+                name = "AnimeSalt (Multi-Audio HLS)",
+                url = "parx://animesalt/tv/${movie.id}/$sNum/$eNum",
+                color = Color(0xFFEC4899),
+                badge = "ANIME MULTI",
+                isHindi = true
+            )
+        )
+    }
+    servers.add(
+        StreamServer(
+            id = "parx_moviebox",
+            name = "MovieBox Cloud (Direct MP4)",
+            url = if (isSeries) "parx://movieBoxWeb/tv/${movie.id}/$sNum/$eNum" else "parx://movieBoxWeb/movie/${movie.id}",
+            color = Color(0xFF8B5CF6),
+            badge = "DIRECT MP4",
+            isHindi = true
+        )
+    )
+    servers.add(
+        StreamServer(
+            id = "parx_4khdhub",
+            name = "4KHDHub Cloud (Direct HD)",
+            url = if (isSeries) "parx://4khdhub/tv/${movie.id}/$sNum/$eNum" else "parx://4khdhub/movie/${movie.id}",
+            color = Color(0xFF0EA5E9),
+            badge = "CLOUD 1080P",
+            isHindi = true
+        )
+    )
+
     // 44. Official Trailer (HD) (Matches WatchPageClient.tsx lines 2090-2101)
     val trailerYtId = extractYouTubeVideoId(movie.trailerUrl)
     if (trailerYtId != null) {
@@ -3221,7 +3295,7 @@ fun getAvailableServers(
             "vidsrc_pm", "upcloud", "flixer", "vidnest", "primesrc", "vidspark", "vidstuck",
             "cinemaos", "vidplay", "vidfast", "vidsrc_to", "twoembed", "moviesapi", "vixsrc", "vixsrc_hindi",
             "nontongo", "multiembed", "screenscape", "godrive", "vidapi", "vidcore",
-            "vidsrc_su", "anyembed", "trailer"
+            "vidsrc_su", "anyembed", "autoembed_pro", "smashystream", "parx_cinepro", "parx_animesalt", "parx_moviebox", "parx_4khdhub", "trailer"
         )
         return uniqueServers.filter { server ->
             val id = server.id.lowercase()

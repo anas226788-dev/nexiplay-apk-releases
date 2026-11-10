@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -528,8 +529,9 @@ object WebFeaturesRepository {
         isLenient = true
     }
 
-    private fun httpGet(urlStr: String, timeoutMs: Int = 15000): String {
+    private fun httpGet(urlStr: String, timeoutMs: Int = 15000, headers: Map<String, String> = emptyMap()): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
             requestMethod = "GET"
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
@@ -695,7 +697,319 @@ object WebFeaturesRepository {
         return probeSingleUrl(cleanDirect, "https://vidvault.to/")
     }
 
-    // ── 1. Fast Direct MKV Download Vault (/api/download/vault) ──
+    private const val PARX_API_BASE = "https://parxstream.vercel.app/api"
+
+    private fun cleanParxTitle(rawTitle: String): String {
+        return rawTitle
+            .replace(Regex("""\(?\b(?:season|s)\s*\d+(?:\s*[-–to]+\s*\d+)?\)?""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\[.*?\]"""), "")
+            .replace(Regex("""\(?\b(?:19|20)\d{2}\b\)?"""), "")
+            .replace(Regex("""\b(?:hindi|dubbed|dual\s*audio|multi\s*audio|english|japanese|subbed|4k|1080p|720p)\b""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""[-–:]+$"""), "")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun normalizeTitleForMatch(raw: String): String {
+        return cleanParxTitle(raw)
+            .lowercase()
+            .replace(Regex("""[^a-z0-9\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun isParxTitleMatch(candidateTitle: String, targetTitle: String): Boolean {
+        val cleanTarget = normalizeTitleForMatch(targetTitle)
+        val cleanCandidate = normalizeTitleForMatch(candidateTitle)
+        if (cleanTarget.isEmpty() || cleanCandidate.isEmpty()) return false
+        if (cleanCandidate.contains(cleanTarget) || cleanTarget.contains(cleanCandidate)) return true
+        val words = cleanTarget.split(" ").filter { it.length >= 2 }
+        if (words.isEmpty()) return false
+        val matched = words.count { cleanCandidate.contains(it) }
+        return matched >= maxOf(1, kotlin.math.ceil(words.size * 0.7).toInt())
+    }
+
+    private fun matchesParxEpisode(epTitle: String, epNum: Int, seasonNum: Int?): Boolean {
+        val t = epTitle.lowercase()
+        if (seasonNum != null && Regex("""\bs0*${seasonNum}\s*e0*${epNum}\b""", RegexOption.IGNORE_CASE).containsMatchIn(t)) {
+            return true
+        }
+        return Regex("""\b(?:episode|ep)[\s\-_.:]*0*${epNum}\b""", RegexOption.IGNORE_CASE).containsMatchIn(t) ||
+            Regex("""\be0*${epNum}\b""", RegexOption.IGNORE_CASE).containsMatchIn(t) ||
+            Regex("""^0*${epNum}$""").containsMatchIn(t.trim())
+    }
+
+    private fun pickBestParxStream(streamsArray: JsonArray, targetQualityNum: Int): String? {
+        val links = streamsArray.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val link = obj["link"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
+            val server = obj["server"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val q = obj["quality"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            Triple(link, server, q)
+        }
+        if (links.isEmpty()) return null
+
+        val exactQ = links.firstOrNull { (_, srv, q) ->
+            "$q $srv".contains(targetQualityNum.toString())
+        }
+        if (exactQ != null) return exactQ.first
+
+        return links.firstOrNull { (l, _, _) -> l.contains("pixeldrain") && l.contains("download") }?.first
+            ?: links.firstOrNull { (l, _, _) -> l.contains("googleusercontent.com") || l.contains("googlevideo") }?.first
+            ?: links.firstOrNull { (l, _, _) -> l.contains("hakunaymatata.com") }?.first
+            ?: links.firstOrNull { (l, _, _) -> l.contains("pixeldrain") }?.first
+            ?: links.first().first
+    }
+
+    private fun resolveClientDirectParxDownload(
+        rawTitle: String,
+        isTv: Boolean,
+        season: Int?,
+        episode: Int?,
+        quality: String
+    ): VaultDownloadResult? {
+        val cleanTitle = cleanParxTitle(rawTitle)
+        if (cleanTitle.isEmpty()) return null
+
+        val sNum = season ?: Regex("""\b(?:season|s)\s*(\d+)\b""", RegexOption.IGNORE_CASE)
+            .find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val eNum = episode ?: 1
+        val qNum = Regex("""(2160|1080|720|480|360)""").find(quality)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 720
+        val safeBase = cleanTitle.replace(Regex("""[^a-zA-Z0-9_\- ]"""), "").trim().replace(Regex("""\s+"""), "_")
+
+        // 1. Try 4khdhub & hdhub4u directly from Android phone (0 DB / 0 Vercel load)
+        for (provider in listOf("4khdhub", "hdhub4u")) {
+            try {
+                val searchRaw = httpGet("$PARX_API_BASE/providers/$provider/search?q=${URLEncoder.encode(cleanTitle, "UTF-8")}&page=1", timeoutMs = 8000)
+                val searchArr = json.parseToJsonElement(searchRaw) as? JsonArray ?: continue
+                val matchedPost = searchArr.firstOrNull { el ->
+                    val obj = el as? JsonObject ?: return@firstOrNull false
+                    val postTitle = obj["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    isParxTitleMatch(postTitle, cleanTitle)
+                } as? JsonObject ?: continue
+
+                val postLink = matchedPost["link"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: continue
+                val metaRaw = httpGet("$PARX_API_BASE/providers/$provider/meta?link=${URLEncoder.encode(postLink, "UTF-8")}", timeoutMs = 8500)
+                val metaObj = json.parseToJsonElement(metaRaw) as? JsonObject ?: continue
+                val linkList = metaObj["linkList"]?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject } ?: continue
+                if (linkList.isEmpty()) continue
+
+                val seasonFiltered = if (isTv) {
+                    val matches = linkList.filter { item ->
+                        val t = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        Regex("""\b(?:season|s)\s*0*$sNum\b""", RegexOption.IGNORE_CASE).containsMatchIn(t) ||
+                            !Regex("""\b(?:season|s)\s*\d+\b""", RegexOption.IGNORE_CASE).containsMatchIn(t)
+                    }
+                    matches.ifEmpty { linkList }
+                } else {
+                    linkList
+                }
+
+                val sortedGroups = seasonFiltered.sortedByDescending { item ->
+                    val qText = "${item["quality"]?.jsonPrimitive?.contentOrNull.orEmpty()} ${item["title"]?.jsonPrimitive?.contentOrNull.orEmpty()}"
+                    if (qText.contains(qNum.toString())) 1 else 0
+                }
+
+                for (group in sortedGroups.take(3)) {
+                    var targetPageLink: String? = null
+                    var streamType = if (isTv) "series" else "movie"
+
+                    if (isTv) {
+                        val directLinks = group["directLinks"]?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject }.orEmpty()
+                        if (directLinks.isNotEmpty()) {
+                            val epObj = directLinks.firstOrNull { d ->
+                                matchesParxEpisode(d["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), eNum, sNum)
+                            } ?: directLinks.getOrNull(eNum - 1)
+                            targetPageLink = epObj?.get("link")?.jsonPrimitive?.contentOrNull
+                            streamType = epObj?.get("type")?.jsonPrimitive?.contentOrNull ?: "series"
+                        }
+                        if (targetPageLink.isNullOrBlank()) {
+                            val epsUrl = group["episodesLink"]?.jsonPrimitive?.contentOrNull
+                            if (!epsUrl.isNullOrBlank()) {
+                                val epListRaw = httpGet("$PARX_API_BASE/providers/$provider/episodes?url=${URLEncoder.encode(epsUrl, "UTF-8")}", timeoutMs = 8000)
+                                val epArr = json.parseToJsonElement(epListRaw) as? JsonArray
+                                val epList = epArr?.mapNotNull { it as? JsonObject }.orEmpty()
+                                val epObj = epList.firstOrNull { d ->
+                                    matchesParxEpisode(d["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), eNum, sNum)
+                                } ?: epList.getOrNull(eNum - 1)
+                                targetPageLink = epObj?.get("link")?.jsonPrimitive?.contentOrNull
+                            }
+                        }
+                    } else {
+                        val directLinks = group["directLinks"]?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject }.orEmpty()
+                        if (directLinks.isNotEmpty()) {
+                            targetPageLink = directLinks.first()["link"]?.jsonPrimitive?.contentOrNull
+                            streamType = directLinks.first()["type"]?.jsonPrimitive?.contentOrNull ?: "movie"
+                        } else {
+                            targetPageLink = group["episodesLink"]?.jsonPrimitive?.contentOrNull
+                        }
+                    }
+
+                    if (targetPageLink.isNullOrBlank()) continue
+                    val streamRaw = httpGet(
+                        "$PARX_API_BASE/providers/$provider/stream?link=${URLEncoder.encode(targetPageLink, "UTF-8")}&type=${URLEncoder.encode(streamType, "UTF-8")}",
+                        timeoutMs = 9000
+                    )
+                    val streamArr = json.parseToJsonElement(streamRaw) as? JsonArray ?: continue
+                    val bestLink = pickBestParxStream(streamArr, qNum)
+                    if (!bestLink.isNullOrBlank()) {
+                        val ext = if (bestLink.lowercase().contains(".mp4")) "mp4" else "mkv"
+                        return VaultDownloadResult(
+                            success = true,
+                            source = "${provider}_direct",
+                            url = bestLink,
+                            directUrl = bestLink,
+                            fileName = "${safeBase}${if (isTv) "_S${sNum}E${eNum}" else ""}_$quality.$ext",
+                            quality = quality
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 2. Try movieBoxWeb directly from Android phone (Direct MP4 CDN)
+        try {
+            val searchRaw = httpGet("$PARX_API_BASE/providers/movieBoxWeb/search?q=${URLEncoder.encode(cleanTitle, "UTF-8")}&page=1", timeoutMs = 8000)
+            val searchArr = json.parseToJsonElement(searchRaw) as? JsonArray
+            val matchedPost = searchArr?.firstOrNull { el ->
+                val obj = el as? JsonObject ?: return@firstOrNull false
+                isParxTitleMatch(obj["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), cleanTitle)
+            } as? JsonObject
+            val postLink = matchedPost?.get("link")?.jsonPrimitive?.contentOrNull
+            if (!postLink.isNullOrBlank()) {
+                val metaRaw = httpGet("$PARX_API_BASE/providers/movieBoxWeb/meta?link=${URLEncoder.encode(postLink, "UTF-8")}", timeoutMs = 8000)
+                val metaObj = json.parseToJsonElement(metaRaw) as? JsonObject
+                val linkList = metaObj?.get("linkList")?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject }.orEmpty()
+                val preferredGroup = linkList.sortedByDescending { g ->
+                    val t = g["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (Regex("hindi|multi|hin", RegexOption.IGNORE_CASE).containsMatchIn(t)) 1 else 0
+                }.firstOrNull()
+
+                if (preferredGroup != null) {
+                    var streamPayload: String? = null
+                    val streamType = if (isTv) "series" else "movie"
+                    if (isTv) {
+                        val epsUrl = preferredGroup["episodesLink"]?.jsonPrimitive?.contentOrNull
+                        if (!epsUrl.isNullOrBlank()) {
+                            val epListRaw = httpGet("$PARX_API_BASE/providers/movieBoxWeb/episodes?url=${URLEncoder.encode(epsUrl, "UTF-8")}", timeoutMs = 8000)
+                            val epList = (json.parseToJsonElement(epListRaw) as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+                            val epObj = epList.firstOrNull { d ->
+                                matchesParxEpisode(d["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), eNum, sNum)
+                            } ?: epList.getOrNull(eNum - 1)
+                            streamPayload = epObj?.get("link")?.jsonPrimitive?.contentOrNull
+                        }
+                    } else {
+                        val directLinks = preferredGroup["directLinks"]?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject }.orEmpty()
+                        streamPayload = directLinks.firstOrNull()?.get("link")?.jsonPrimitive?.contentOrNull
+                            ?: preferredGroup["episodesLink"]?.jsonPrimitive?.contentOrNull
+                    }
+
+                    if (!streamPayload.isNullOrBlank()) {
+                        val streamRaw = httpGet(
+                            "$PARX_API_BASE/providers/movieBoxWeb/stream?link=${URLEncoder.encode(streamPayload, "UTF-8")}&type=$streamType",
+                            timeoutMs = 8500
+                        )
+                        val streamArr = json.parseToJsonElement(streamRaw) as? JsonArray
+                        val bestLink = streamArr?.let { pickBestParxStream(it, qNum) }
+                        if (!bestLink.isNullOrBlank()) {
+                            return VaultDownloadResult(
+                                success = true,
+                                source = "moviebox_direct",
+                                url = bestLink,
+                                directUrl = bestLink,
+                                fileName = "${safeBase}${if (isTv) "_S${sNum}E${eNum}" else ""}_$quality.mp4",
+                                quality = quality
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        return null
+    }
+
+    suspend fun resolveParxDirectStream(
+        provider: String,
+        isTv: Boolean,
+        tmdbId: String?,
+        title: String,
+        season: Int = 1,
+        episode: Int = 1
+    ): String? = withContext(Dispatchers.IO) {
+        val cleanTitle = cleanParxTitle(title)
+        val cleanTmdb = tmdbId?.trim()?.removePrefix("tmdb-")?.takeIf { it.isNotBlank() && !it.contains("-") }
+
+        try {
+            when (provider) {
+                "cinepro" -> {
+                    if (cleanTmdb != null) {
+                        val endpoint = if (isTv) {
+                            "$PARX_API_BASE/cinepro/tv/$cleanTmdb/$season/$episode"
+                        } else {
+                            "$PARX_API_BASE/cinepro/movie/$cleanTmdb"
+                        }
+                        val raw = httpGet(endpoint, timeoutMs = 8000)
+                        val obj = json.parseToJsonElement(raw) as? JsonObject
+                        val streams = obj?.get("streams") as? JsonArray
+                        val link = streams?.mapNotNull { (it as? JsonObject)?.get("link")?.jsonPrimitive?.contentOrNull }
+                            ?.firstOrNull { it.startsWith("http") }
+                        if (!link.isNullOrBlank()) return@withContext link
+                    }
+                }
+                "animesalt" -> {
+                    if (cleanTitle.isNotEmpty()) {
+                        val searchRaw = httpGet("$PARX_API_BASE/providers/animesalt/search?q=${URLEncoder.encode(cleanTitle, "UTF-8")}&page=1", timeoutMs = 8000)
+                        val searchArr = json.parseToJsonElement(searchRaw) as? JsonArray
+                        val matched = searchArr?.mapNotNull { it as? JsonObject }?.firstOrNull { obj ->
+                            isParxTitleMatch(obj["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), cleanTitle)
+                        }
+                        val postLink = matched?.get("link")?.jsonPrimitive?.contentOrNull
+                        if (!postLink.isNullOrBlank()) {
+                            val metaRaw = httpGet("$PARX_API_BASE/providers/animesalt/meta?link=${URLEncoder.encode(postLink, "UTF-8")}", timeoutMs = 8000)
+                            val metaObj = json.parseToJsonElement(metaRaw) as? JsonObject
+                            val linkList = metaObj?.get("linkList")?.let { it as? JsonArray }?.mapNotNull { it as? JsonObject }.orEmpty()
+                            val seasonGroup = linkList.firstOrNull { g ->
+                                Regex("""\b(?:season|s)\s*0*$season\b""", RegexOption.IGNORE_CASE)
+                                    .containsMatchIn(g["title"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                            } ?: linkList.firstOrNull()
+                            val epsUrl = seasonGroup?.get("episodesLink")?.jsonPrimitive?.contentOrNull
+                            if (!epsUrl.isNullOrBlank()) {
+                                val epRaw = httpGet("$PARX_API_BASE/providers/animesalt/episodes?url=${URLEncoder.encode(epsUrl, "UTF-8")}", timeoutMs = 8000)
+                                val epList = (json.parseToJsonElement(epRaw) as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+                                val epObj = epList.firstOrNull { e ->
+                                    matchesParxEpisode(e["title"]?.jsonPrimitive?.contentOrNull.orEmpty(), episode, season)
+                                } ?: epList.getOrNull(episode - 1)
+                                val epLink = epObj?.get("link")?.jsonPrimitive?.contentOrNull
+                                if (!epLink.isNullOrBlank()) {
+                                    val streamRaw = httpGet("$PARX_API_BASE/providers/animesalt/stream?link=${URLEncoder.encode(epLink, "UTF-8")}&type=series", timeoutMs = 8000)
+                                    val streamArr = json.parseToJsonElement(streamRaw) as? JsonArray
+                                    val m3u8 = streamArr?.mapNotNull { (it as? JsonObject)?.get("link")?.jsonPrimitive?.contentOrNull }
+                                        ?.firstOrNull { it.startsWith("http") }
+                                    if (!m3u8.isNullOrBlank()) return@withContext m3u8
+                                }
+                            }
+                        }
+                    }
+                }
+                "movieBoxWeb", "4khdhub" -> {
+                    val res = resolveClientDirectParxDownload(
+                        rawTitle = title,
+                        isTv = isTv,
+                        season = season,
+                        episode = episode,
+                        quality = "1080p"
+                    )
+                    if (res != null && !res.directUrl.isNullOrBlank()) {
+                        return@withContext res.directUrl
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        null
+    }
+
+    // ── 1. Fast Direct MKV/MP4 Download Vault (100% Client-Side First -> Zero DB / Zero Vercel Load) ──
 
     suspend fun resolveVaultDownload(
         isTv: Boolean,
@@ -709,53 +1023,80 @@ object WebFeaturesRepository {
     ): VaultDownloadResult = withContext(Dispatchers.IO) {
         val cleanTargetId = targetId.trim().removePrefix("tmdb-")
         val effectiveType = mediaType ?: if (isTv) "tv" else "movie"
-        if (cleanTargetId.isNotEmpty()) {
-            val fallbackQualities = listOf("720p", "1080p", "480p", "360p").filter { !it.equals(quality, ignoreCase = true) }
-            val candidates = buildList {
-                add(Triple(season, episode, quality))
-                for (q in fallbackQualities) {
-                    add(Triple(season, episode, q))
-                }
-                // Some anime/series on VidVault are indexed continuously under Season 1
-                if (isTv && season != null && season > 1 && episode != null) {
-                    add(Triple(1, episode, quality))
-                    if (!quality.equals("720p", ignoreCase = true)) {
-                        add(Triple(1, episode, "720p"))
-                    }
-                }
-            }
 
-            for ((sCandidate, eCandidate, qCandidate) in candidates) {
+        // 1. Try 100% Client-Direct Multi-Provider Resolution from Android device first (0 Vercel & 0 DB load)
+        if (!title.isNullOrBlank()) {
+            val parxDirect = resolveClientDirectParxDownload(
+                rawTitle = title,
+                isTv = isTv,
+                season = season,
+                episode = episode,
+                quality = quality
+            )
+            if (parxDirect != null && parxDirect.success && !parxDirect.directUrl.isNullOrBlank()) {
+                return@withContext parxDirect
+            }
+        }
+
+        // 2. Try Direct VidVault API from Android device (if numeric TMDB ID or tt IMDb ID) — 0 Vercel & 0 DB load
+        val isValidVaultId = cleanTargetId.matches(Regex("""^(\d+|tt\d+)$""", RegexOption.IGNORE_CASE))
+        if (isValidVaultId) {
+            val qualitiesToTry = listOf(quality) + listOf("720p", "1080p", "480p").filter { !it.equals(quality, ignoreCase = true) }
+            for (qTry in qualitiesToTry) {
                 try {
-                    val payload = buildJsonObject {
-                        put("type", JsonPrimitive(effectiveType))
-                        put("id", JsonPrimitive(cleanTargetId))
-                        if (isTv && sCandidate != null) put("season", JsonPrimitive(sCandidate))
-                        if (isTv && eCandidate != null) put("episode", JsonPrimitive(eCandidate))
-                        put("quality", JsonPrimitive(qCandidate))
-                        if (!title.isNullOrBlank()) put("title", JsonPrimitive(title))
-                    }.toString()
-
-                    val raw = httpPostJson("$BASE_WEB_URL/api/download/vault", payload, timeoutMs = 12000)
-                    val parsed = json.decodeFromString<VaultDownloadResult>(raw)
-                    val direct = parsed.directUrl?.trim().orEmpty()
-                    val resolvedUrl = parsed.url?.let { u ->
-                        if (u.startsWith("/")) "$BASE_WEB_URL$u" else u
+                    val vaultPath = if (isTv && season != null && episode != null) {
+                        "https://vidvault.to/download-link/tv/$cleanTargetId/$season/$episode/$qTry"
+                    } else {
+                        "https://vidvault.to/download-link/movie/$cleanTargetId/$qTry"
                     }
-
-                    if (parsed.success && !resolvedUrl.isNullOrBlank() && direct.isNotBlank()) {
-                        if (probeDirectDownloadUrl(resolvedUrl, direct, parsed.source)) {
-                            return@withContext parsed.copy(
-                                url = resolvedUrl,
-                                directUrl = direct,
-                                quality = qCandidate
-                            )
-                        }
+                    val rawVault = httpGet(
+                        vaultPath,
+                        headers = mapOf("Referer" to "https://vidvault.to/"),
+                        timeoutMs = 5000
+                    )
+                    val vaultObj = json.parseToJsonElement(rawVault) as? JsonObject
+                    val directVaultUrl = vaultObj?.get("url")?.jsonPrimitive?.contentOrNull?.trim()
+                    if (!directVaultUrl.isNullOrBlank() && directVaultUrl.startsWith("http")) {
+                        return@withContext VaultDownloadResult(
+                            success = true,
+                            source = "vidvault",
+                            url = directVaultUrl,
+                            directUrl = directVaultUrl,
+                            quality = qTry
+                        )
                     }
-                } catch (_: Exception) {
-                    // Try next quality/season candidate
-                }
+                } catch (_: Exception) {}
             }
+        }
+
+        // 3. Single Edge-Cached Fallback Request to /api/download/vault (e.g. for bundled ToonPlay catalog)
+        if (cleanTargetId.isNotEmpty()) {
+            try {
+                val payload = buildJsonObject {
+                    put("type", JsonPrimitive(effectiveType))
+                    put("id", JsonPrimitive(cleanTargetId))
+                    if (isTv && season != null) put("season", JsonPrimitive(season))
+                    if (isTv && episode != null) put("episode", JsonPrimitive(episode))
+                    put("quality", JsonPrimitive(quality))
+                    if (!title.isNullOrBlank()) put("title", JsonPrimitive(title))
+                }.toString()
+
+                val raw = httpPostJson("$BASE_WEB_URL/api/download/vault", payload, timeoutMs = 10000)
+                val parsed = json.decodeFromString<VaultDownloadResult>(raw)
+                val direct = parsed.directUrl?.trim().orEmpty()
+                val resolvedUrl = parsed.url?.let { u ->
+                    if (u.startsWith("/")) "$BASE_WEB_URL$u" else u
+                }
+
+                if (parsed.success && (!resolvedUrl.isNullOrBlank() || direct.isNotBlank())) {
+                    val targetDirect = direct.ifBlank { resolvedUrl.orEmpty() }
+                    return@withContext parsed.copy(
+                        url = resolvedUrl ?: targetDirect,
+                        directUrl = targetDirect,
+                        quality = parsed.quality ?: quality
+                    )
+                }
+            } catch (_: Exception) {}
         }
 
         // Fallback: If VidVault's upstream worker is down (HTTP 500) or missing this title/episode,
