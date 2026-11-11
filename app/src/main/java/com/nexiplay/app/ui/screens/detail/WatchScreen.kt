@@ -210,11 +210,15 @@ private fun normalizeWebPlayerUrl(url: String): String {
 
 private fun loadTargetUrlInWebView(webView: android.webkit.WebView, targetUrl: String) {
     val cleanUrl = targetUrl.trim()
-    if (cleanUrl.isEmpty() || cleanUrl == "about:blank") {
+    if (cleanUrl.isEmpty() || cleanUrl == "about:blank" || isWrapperWebsiteUrl(cleanUrl)) {
         webView.loadUrl("about:blank")
         return
     }
     val finalUrl = normalizeWebPlayerUrl(cleanUrl)
+    if (isWrapperWebsiteUrl(finalUrl)) {
+        webView.loadUrl("about:blank")
+        return
+    }
     val ref = resolveWebViewReferer(finalUrl)
     if (ref.isNotBlank()) {
         webView.loadUrl(finalUrl, mapOf("Referer" to ref))
@@ -348,15 +352,28 @@ private fun resolveWebViewReferer(targetUrl: String): String {
     }
 }
 
+private fun isWrapperWebsiteUrl(url: String?): Boolean {
+    val l = url?.trim()?.lowercase().orEmpty()
+    if (l.isEmpty()) return false
+    return l.contains("rareanimes.") ||
+        l.contains("raretoons.") ||
+        l.contains("codedew.com/zipper") ||
+        l.contains("/zipper/") ||
+        l.contains("streambeta") ||
+        l.contains("desidubanime.") ||
+        l.contains("toonstream.") ||
+        l.contains("watchanimeworld.") ||
+        l.contains("animeworld.")
+}
+
 private val ALLOWED_PLAYER_HOSTS = listOf(
     "cinebros", "cinevu", "framextv", "flaxjoy", "cinesrc", "cineruv",
     "vexo", "atlantic", "vidbolt", "dulo.mov", "rivestream", "vidlove",
     "cinemaos", "movienerds", "screenscape", "vidrock", "videasy", "vidlink",
     "vidsrc", "videm", "vidfast", "2embed", "twoembed", "streamsrcs", "autoembed", "dmca.stream", "wishembed",
     "moviesapi", "vixsrc", "nontongo", "multiembed", "streamingnow", "gdriveplayer",
-    "vaplayer", "vidcore", "anyembed", "razorshell", "seekplayer", "codedew",
-    "rareanimes", "raretoons", "zephyrflick", "toonstream", "watchanimeworld",
-    "animeworld", "animerulz", "animixstream", "youtube", "youtu.be", "googlevideo",
+    "vaplayer", "vidcore", "anyembed", "razorshell", "seekplayer",
+    "zephyrflick", "animerulz", "animixstream", "youtube", "youtu.be", "googlevideo",
     "rabbitstream", "megacloud", "vidplay", "filemoon", "streamwish", "vidhide",
     "rubystm", "dood", "mixdrop", "voe", "uqload", "streamtape", "mp4upload",
     "abyss", "short.ink", "abyssplayer", "ashleyhardat", "shannoncoldalready", "rendingdecreasehere", "playmogo", "ds2play",
@@ -376,8 +393,16 @@ private fun isAllowedMainFrameNavigation(targetUrl: String, currentServerUrl: St
     val targetHost = try { java.net.URI(lower).host?.lowercase().orEmpty() } catch (_: Exception) { "" }
     if (targetHost.isEmpty()) return false
 
-    // Block full scraper websites and marketing pages from hijacking the in-app player screen
-    if (targetHost.contains("desidubanime.me") || targetHost.contains("rareanimes.net") || targetHost.contains("toonstream.vip") || targetHost == "abyss.to" || targetHost.endsWith(".abyss.to")) {
+    // Block full scraper websites and wrapper pages from opening inside the in-app player WebView
+    if (targetHost.contains("desidubanime.") ||
+        targetHost.contains("rareanimes.") ||
+        targetHost.contains("raretoons.") ||
+        targetHost.contains("toonstream.") ||
+        targetHost.contains("codedew.") ||
+        lower.contains("/zipper/") ||
+        targetHost == "abyss.to" ||
+        targetHost.endsWith(".abyss.to")
+    ) {
         return false
     }
 
@@ -822,12 +847,15 @@ fun WatchScreen(
                 )
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     isResolvingServer = false
-                    val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() }
-                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() && !it.contains("workers.dev") }
-                    fallbackWebEmbedUrl = embed?.takeIf { it != playback && !it.contains("workers.dev") }
-                    selectedServerUrl = playback ?: embed ?: rawUrl
+                    val playback = streamData?.playbackUrl?.takeIf { it.isNotBlank() && !isWrapperWebsiteUrl(it) }
+                    val embed = streamData?.embedUrl?.takeIf { it.isNotBlank() && !it.contains("workers.dev") && !isWrapperWebsiteUrl(it) }
+                    fallbackWebEmbedUrl = embed?.takeIf { it != playback }
+                    val target = playback ?: embed ?: rawUrl.takeIf { !isWrapperWebsiteUrl(it) }
+                    if (target != null) {
+                        selectedServerUrl = target
+                    }
                     if (playback == null && embed == null) {
-                        android.widget.Toast.makeText(context, "Stream temporarily unavailable on this server. Please choose Server Nexiplay.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, "Stream temporarily unavailable on this server. Please try another server.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -910,12 +938,20 @@ fun WatchScreen(
                     seasonNum = sNum
                 )
                 isResolvingServer = false
-                val finalTarget = resolved.takeIf { it.isNotBlank() } ?: rawUrl
-                selectedServerUrl = normalizeWebPlayerUrl(finalTarget)
+                val finalTarget = resolved.takeIf { it.isNotBlank() && !isWrapperWebsiteUrl(it) }
+                if (finalTarget != null) {
+                    selectedServerUrl = normalizeWebPlayerUrl(finalTarget)
+                } else {
+                    android.widget.Toast.makeText(context, "Stream unavailable on this server. Please try another server.", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
         } else {
             isResolvingServer = false
-            selectedServerUrl = rawUrl
+            if (!isWrapperWebsiteUrl(rawUrl)) {
+                selectedServerUrl = rawUrl
+            } else {
+                android.widget.Toast.makeText(context, "Stream unavailable on this server. Please try another server.", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

@@ -479,6 +479,20 @@ object WebFeaturesRepository {
         null
     }
 
+    private fun isWrapperSiteUrl(url: String?): Boolean {
+        val l = url?.trim()?.lowercase().orEmpty()
+        if (l.isEmpty()) return false
+        return l.contains("rareanimes.") ||
+            l.contains("raretoons.") ||
+            l.contains("codedew.com/zipper") ||
+            l.contains("/zipper/") ||
+            l.contains("streambeta") ||
+            l.contains("desidubanime.") ||
+            l.contains("toonstream.") ||
+            l.contains("watchanimeworld.") ||
+            l.contains("animeworld.")
+    }
+
     suspend fun fetchRRStreamApi(
         id: String,
         slug: String,
@@ -503,10 +517,19 @@ object WebFeaturesRepository {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 val obj = JSONObject(body)
                 if (obj.optBoolean("success", false)) {
-                    fun isDead(u: String?) = u.isNullOrBlank() || u.contains("streamindia.co.in", ignoreCase = true) || u.contains("groovy.monster", ignoreCase = true)
-                    val direct = obj.optString("directStreamUrl").takeIf { !isDead(it) }
-                    val playback = obj.optString("playbackUrl").takeIf { !isDead(it) }
+                    fun isDead(u: String?) = u.isNullOrBlank() ||
+                        u.contains("streamindia.co.in", ignoreCase = true) ||
+                        u.contains("groovy.monster", ignoreCase = true) ||
+                        isWrapperSiteUrl(u)
+                    val rawDirect = obj.optString("directStreamUrl")
+                    val isGroovyDirect = rawDirect.contains("groovy.monster", ignoreCase = true)
+                    val direct = rawDirect.takeIf { !isDead(it) }
                     val embed = obj.optString("embedUrl").takeIf { !isDead(it) }
+                    // Vercel /api/v1/anime/playback returns 404 when upstream direct stream is IP-locked groovy.monster,
+                    // so prefer clean embedUrl (e.g. argon.razorshell.space/embed/...) immediately.
+                    val playback = obj.optString("playbackUrl").takeIf {
+                        !isDead(it) && !(isGroovyDirect && !embed.isNullOrBlank())
+                    }
                     if (direct != null || playback != null || embed != null) {
                         return@withContext RRStreamResult(
                             success = true,
@@ -1693,60 +1716,74 @@ object WebFeaturesRepository {
             }
         }
 
-        for (postUrl in livePostUrls) {
-            try {
-                val liveResolved = resolveWebEmbedUrl(
-                    embedUrl = postUrl,
-                    episodeNum = episode,
-                    relativeEpisodeNum = relativeEpisode,
-                    seasonNum = season
-                ).trim()
+        suspend fun tryPostUrls(urlsToTry: List<String>): RRStreamResult? {
+            for (postUrl in urlsToTry) {
+                try {
+                    val liveResolved = resolveWebEmbedUrl(
+                        embedUrl = postUrl,
+                        episodeNum = episode,
+                        relativeEpisodeNum = relativeEpisode,
+                        seasonNum = season
+                    ).trim()
 
-                if (liveResolved.isNotBlank() && liveResolved != postUrl) {
-                    val lowerLive = liveResolved.lowercase()
-                    if (lowerLive.contains(".m3u8") || lowerLive.contains(".mp4") || lowerLive.contains(".mkv") || lowerLive.contains("workers.dev") || lowerLive.contains("flashzipper")) {
-                        val res = RRStreamResult(
-                            success = true,
-                            playbackUrl = liveResolved,
-                            embedUrl = liveResolved,
-                            format = "hls_stream"
-                        )
-                        rrStreamCache[cacheKey] = res
-                        onProgress(1.0f, "Stream ready, starting player...")
-                        return@withContext res
-                    }
+                    if (liveResolved.isNotBlank() && liveResolved != postUrl && !isWrapperSiteUrl(liveResolved)) {
+                        val lowerLive = liveResolved.lowercase()
+                        if (lowerLive.contains(".m3u8") || lowerLive.contains(".mp4") || lowerLive.contains(".mkv") || lowerLive.contains("workers.dev") || lowerLive.contains("flashzipper")) {
+                            return RRStreamResult(
+                                success = true,
+                                playbackUrl = liveResolved,
+                                embedUrl = liveResolved,
+                                format = "hls_stream"
+                            )
+                        }
 
-                    if (lowerLive.contains("razorshell.space") || lowerLive.contains("seeking.buzz") || lowerLive.contains("codedew")) {
-                        try {
-                            val embedHtml = httpGetHtml(liveResolved, referer = "https://codedew.com/", timeoutMs = 4000)
-                            if (!embedHtml.isNullOrBlank()) {
-                                val directM3u8 = decodeJuicyCodesM3u8(embedHtml)
-                                if (!directM3u8.isNullOrBlank()) {
-                                    val res = RRStreamResult(
-                                        success = true,
-                                        playbackUrl = directM3u8,
-                                        embedUrl = liveResolved,
-                                        format = "hls_stream"
-                                    )
-                                    rrStreamCache[cacheKey] = res
-                                    onProgress(1.0f, "Stream ready, starting player...")
-                                    return@withContext res
+                        if (lowerLive.contains("razorshell.space") || lowerLive.contains("seeking.buzz")) {
+                            try {
+                                val embedHtml = httpGetHtml(liveResolved, referer = "https://codedew.com/", timeoutMs = 5000)
+                                if (!embedHtml.isNullOrBlank()) {
+                                    val directM3u8 = decodeJuicyCodesM3u8(embedHtml)
+                                    if (!directM3u8.isNullOrBlank() && !directM3u8.contains("groovy.monster", ignoreCase = true)) {
+                                        return RRStreamResult(
+                                            success = true,
+                                            playbackUrl = directM3u8,
+                                            embedUrl = liveResolved,
+                                            format = "hls_stream"
+                                        )
+                                    }
                                 }
-                            }
-                        } catch (_: Exception) {}
-                    }
+                            } catch (_: Exception) {}
+                        }
 
-                    val res = RRStreamResult(
-                        success = true,
-                        playbackUrl = null,
-                        embedUrl = liveResolved,
-                        format = "embed"
-                    )
-                    rrStreamCache[cacheKey] = res
+                        return RRStreamResult(
+                            success = true,
+                            playbackUrl = null,
+                            embedUrl = liveResolved,
+                            format = "embed"
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
+            return null
+        }
+
+        val postResult = tryPostUrls(livePostUrls)
+        if (postResult != null) {
+            rrStreamCache[cacheKey] = postResult
+            onProgress(1.0f, "Stream ready, starting player...")
+            return@withContext postResult
+        }
+
+        // If configured RareAnimes URL was outdated (e.g. rareanimes.net anti-bot redirect), live search www.rareanimes.fans
+        if (title.isNotBlank() || slug.isNotBlank()) {
+            val foundLive = liveSearchRareAnimesPostOnDevice(title.ifBlank { slug }, season)
+            if (!foundLive.isNullOrBlank() && !livePostUrls.contains(foundLive)) {
+                val searchedResult = tryPostUrls(listOf(foundLive))
+                if (searchedResult != null) {
+                    rrStreamCache[cacheKey] = searchedResult
                     onProgress(1.0f, "Stream ready, starting player...")
-                    return@withContext res
+                    return@withContext searchedResult
                 }
-            } catch (_: Exception) {}
+            }
         }
 
         // 4. Try other direct/zipper/embed candidates on-device
@@ -1778,6 +1815,10 @@ object WebFeaturesRepository {
                     seasonNum = season
                 ).trim()
 
+                if (resolvedEmbed.isBlank() || isWrapperSiteUrl(resolvedEmbed)) {
+                    continue
+                }
+
                 val lowerResolved = resolvedEmbed.lowercase()
                 if (lowerResolved.contains(".m3u8") || lowerResolved.contains(".mp4") || lowerResolved.contains(".mkv") || lowerResolved.contains("workers.dev") || lowerResolved.contains("flashzipper")) {
                     val res = RRStreamResult(
@@ -1801,7 +1842,7 @@ object WebFeaturesRepository {
                         decodeJuicyCodesM3u8(embedHtml)
                     } else null
 
-                    if (directM3u8 != null && !directM3u8.contains("groovy.monster")) {
+                    if (directM3u8 != null && !directM3u8.contains("groovy.monster", ignoreCase = true)) {
                         val res = RRStreamResult(
                             success = true,
                             playbackUrl = directM3u8,
@@ -1814,7 +1855,7 @@ object WebFeaturesRepository {
                     }
                 }
 
-                if (resolvedEmbed.isNotBlank() && resolvedEmbed != candidate && !lowerResolved.contains("razorshell.space")) {
+                if (resolvedEmbed != candidate) {
                     val res = RRStreamResult(
                         success = true,
                         playbackUrl = null,
@@ -1899,8 +1940,8 @@ object WebFeaturesRepository {
         if (currentUrl.contains("rareanimes.", ignoreCase = true) ||
             currentUrl.contains("raretoons.", ignoreCase = true)
         ) {
-            val postCandidates = buildList {
-                val urlSeasonRegex = Regex("""season-0*(\d+)\b""", RegexOption.IGNORE_CASE)
+            val urlSeasonRegex = Regex("""season-0*(\d+)\b""", RegexOption.IGNORE_CASE)
+            val baseList = buildList<String> {
                 val m = urlSeasonRegex.find(currentUrl)
                 val parsedS = m?.groupValues?.getOrNull(1)?.toIntOrNull()
                 if (parsedS != null && parsedS != seasonNum) {
@@ -1911,13 +1952,24 @@ object WebFeaturesRepository {
                     }
                 }
                 add(currentUrl)
+            }
+            // Rewrite rareanimes.net -> www.rareanimes.fans as preferred/backup candidates because rareanimes.net serves an anti-bot redirect page
+            val postCandidates = baseList.flatMap { u ->
+                if (u.contains("rareanimes.net", ignoreCase = true)) {
+                    listOf(
+                        u.replace(Regex("""https?://(?:www\.)?rareanimes\.net""", RegexOption.IGNORE_CASE), "https://www.rareanimes.fans"),
+                        u
+                    )
+                } else {
+                    listOf(u)
+                }
             }.distinct()
 
             val anyEpHeaderRegex = Regex("""(?:Episode|Ep\.?)\s*0*(\d+)\b""", RegexOption.IGNORE_CASE)
 
             for (candidatePostUrl in postCandidates) {
                 try {
-                    val postHtml = httpGetHtml(candidatePostUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
+                    val postHtml = httpGetHtml(candidatePostUrl, referer = "https://www.rareanimes.fans/", timeoutMs = 9500)
                     if (!postHtml.isNullOrBlank()) {
                         var matchedZipper: String? = null
                         val candidateEps = listOf(relativeEpisodeNum, episodeNum).distinct()
@@ -1988,6 +2040,7 @@ object WebFeaturesRepository {
                             break
                         } else {
                             val directIframes = extractIframesFromHtml(postHtml, candidatePostUrl)
+                                .filter { !isWrapperSiteUrl(it) }
                             if (directIframes.isNotEmpty()) {
                                 currentUrl = directIframes.first()
                                 break
@@ -2004,7 +2057,7 @@ object WebFeaturesRepository {
             currentUrl.contains("streambeta", ignoreCase = true)
         ) {
             try {
-                val zipperHtml = httpGetHtml(currentUrl, referer = "https://rareanimes.net/", timeoutMs = 5000)
+                val zipperHtml = httpGetHtml(currentUrl, referer = "https://www.rareanimes.fans/", timeoutMs = 9500)
                 if (!zipperHtml.isNullOrBlank()) {
                     val streamUrlMatch = Regex(""""stream_url"\s*:\s*"([^"]+)"""").find(zipperHtml)
                         ?: Regex(""""url"\s*:\s*"(https?:\\/\\/[^"]*workers\.dev[^"]*)"""").find(zipperHtml)
