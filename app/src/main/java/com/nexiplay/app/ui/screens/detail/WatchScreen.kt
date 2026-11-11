@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -37,12 +38,19 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.HighQuality
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Speed
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -1170,6 +1178,13 @@ fun WatchScreen(
         }
     }
 
+    // Always restore normal screen sleep when leaving WatchScreen
+    DisposableEffect(activity) {
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
 
     Box(modifier = Modifier.fillMaxSize()) {
         androidx.activity.compose.BackHandler(enabled = isFullscreen) {
@@ -1387,10 +1402,23 @@ fun WatchScreen(
                                     }
                                 )
                             } else if (selectedServerUrl != null) {
+                                // Keep screen awake while an embed stream is active in WebView
+                                DisposableEffect(selectedServerUrl, isResolvingServer, activity) {
+                                    val win = activity?.window
+                                    if (!isResolvingServer) {
+                                        win?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                    } else {
+                                        win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                    }
+                                    onDispose {
+                                        win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                    }
+                                }
                                 AndroidView(
                                     factory = { ctx ->
                                         WebView(ctx).apply {
                                             webViewRef.value = this
+                                            keepScreenOn = !isResolvingServer
                                             layoutParams = ViewGroup.LayoutParams(
                                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -1522,6 +1550,7 @@ fun WatchScreen(
                                     },
                                     update = { webView ->
                                         webViewRef.value = webView
+                                        webView.keepScreenOn = !isResolvingServer
                                         val target = selectedServerUrl
                                         if (target != null && !isResolvingServer && webView.tag != target) {
                                             webView.tag = target
@@ -1530,6 +1559,7 @@ fun WatchScreen(
                                     },
                                     onRelease = { webView ->
                                         webViewRef.value = null
+                                        webView.keepScreenOn = false
                                         try {
                                             webView.stopLoading()
                                             webView.onPause()
@@ -2410,6 +2440,7 @@ fun WatchScreen(
                     },
                     update = { frameLayout ->
                         if (customView != null && customView?.parent != frameLayout) {
+                            customView?.keepScreenOn = true
                             (customView?.parent as? ViewGroup)?.removeView(customView)
                             frameLayout.removeAllViews()
                             frameLayout.addView(customView, FrameLayout.LayoutParams(
@@ -2427,6 +2458,24 @@ fun WatchScreen(
 }
 }
 
+private data class InlineVideoQuality(
+    val group: TrackGroup,
+    val trackIndex: Int,
+    val label: String,
+    val detailLabel: String?,
+    val height: Int,
+    val bitrate: Int
+)
+
+private fun formatInlineSpeed(speed: Float): String {
+    return when {
+        speed == 1.0f -> "1x"
+        speed == 2.0f -> "2x"
+        speed * 100f % 10f == 0f -> "${String.format(java.util.Locale.US, "%.1f", speed)}x"
+        else -> "${String.format(java.util.Locale.US, "%.2f", speed)}x"
+    }
+}
+
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun InlineWatchPlayer(
@@ -2437,16 +2486,137 @@ private fun InlineWatchPlayer(
     onPlaybackError: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
     var isPlaying by remember { mutableStateOf(true) }
     var isBuffering by remember { mutableStateOf(true) }
     var currentPos by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var showControls by remember { mutableStateOf(true) }
-    var audioTracks by remember { mutableStateOf<List<Triple<androidx.media3.common.TrackGroup, Int, String>>>(emptyList()) }
+    var audioTracks by remember { mutableStateOf<List<Triple<TrackGroup, Int, String>>>(emptyList()) }
     var selectedAudioLabel by remember { mutableStateOf("Audio") }
     var showAudioDialog by remember { mutableStateOf(false) }
+
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+    var showSpeedDialog by remember { mutableStateOf(false) }
+
+    var videoQualities by remember { mutableStateOf<List<InlineVideoQuality>>(emptyList()) }
+    var isAutoQuality by remember { mutableStateOf(true) }
+    var selectedQualityLabel by remember { mutableStateOf("Auto") }
+    var activeVideoHeight by remember { mutableIntStateOf(0) }
+    var showQualityDialog by remember { mutableStateOf(false) }
+
     var triedProxyFallback by remember(streamUrl) { mutableStateOf(false) }
+
+    // Keep device screen awake while video is actively playing or buffering; release when paused or disposed
+    val shouldKeepScreenOn = isPlaying || isBuffering
+    DisposableEffect(shouldKeepScreenOn, activity) {
+        val window = activity?.window
+        if (shouldKeepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    fun syncPlayerTracks(player: ExoPlayer) {
+        val tracks = player.currentTracks
+        val audioList = mutableListOf<Triple<TrackGroup, Int, String>>()
+        var hindiSelected = false
+
+        val rawQualities = mutableListOf<InlineVideoQuality>()
+        var anyVideoOverrideSelected = false
+        var overriddenLabel: String? = null
+        var detectedSelectedHeight = 0
+
+        for (group in tracks.groups) {
+            if (group.type == C.TRACK_TYPE_AUDIO) {
+                for (i in 0 until group.length) {
+                    val fmt = group.getTrackFormat(i)
+                    val label = fmt.label?.takeIf { it.isNotBlank() }
+                        ?: fmt.language?.takeIf { it.isNotBlank() }?.uppercase()
+                        ?: "Track ${audioList.size + 1}"
+                    audioList.add(Triple(group.mediaTrackGroup, i, label))
+                    if (!hindiSelected && (label.contains("hi", ignoreCase = true) || label.contains("hindi", ignoreCase = true))) {
+                        hindiSelected = true
+                        selectedAudioLabel = label
+                        if (!group.isTrackSelected(i)) {
+                            player.trackSelectionParameters = player.trackSelectionParameters
+                                .buildUpon()
+                                .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
+                                .build()
+                        }
+                    } else if (group.isTrackSelected(i) && !hindiSelected) {
+                        selectedAudioLabel = label
+                    }
+                }
+            } else if (group.type == C.TRACK_TYPE_VIDEO) {
+                val hasOverride = player.trackSelectionParameters.overrides.containsKey(group.mediaTrackGroup)
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSupported(i)) continue
+                    val fmt = group.getTrackFormat(i)
+                    val h = fmt.height.coerceAtLeast(0)
+                    val br = fmt.bitrate.coerceAtLeast(0)
+                    val baseLabel = when {
+                        h > 0 -> "${h}p"
+                        br > 0 -> "${br / 1000} kbps"
+                        else -> "Quality ${rawQualities.size + 1}"
+                    }
+                    val detailParts = mutableListOf<String>()
+                    when {
+                        h >= 2160 -> detailParts.add("4K UHD")
+                        h >= 1440 -> detailParts.add("2K QHD")
+                        h >= 1080 -> detailParts.add("Full HD")
+                        h >= 720 -> detailParts.add("HD")
+                        h in 1..480 -> detailParts.add("SD")
+                    }
+                    if (br > 0) {
+                        val mbps = br / 1_000_000f
+                        detailParts.add(
+                            if (mbps >= 1f) "${String.format(java.util.Locale.US, "%.1f", mbps)} Mbps"
+                            else "${br / 1000} kbps"
+                        )
+                    }
+                    if (fmt.frameRate > 31f) {
+                        detailParts.add("${fmt.frameRate.toInt()}fps")
+                    }
+                    rawQualities.add(
+                        InlineVideoQuality(
+                            group = group.mediaTrackGroup,
+                            trackIndex = i,
+                            label = baseLabel,
+                            detailLabel = detailParts.joinToString(" • ").ifBlank { null },
+                            height = h,
+                            bitrate = br
+                        )
+                    )
+                    if (group.isTrackSelected(i)) {
+                        if (h > 0) detectedSelectedHeight = h
+                        if (hasOverride) {
+                            anyVideoOverrideSelected = true
+                            overriddenLabel = baseLabel
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deduplicate identical height+bitrate tracks, keeping highest bitrate variant per distinct option
+        val sortedQualities = rawQualities
+            .distinctBy { "${it.height}_${it.bitrate}" }
+            .sortedWith(compareByDescending<InlineVideoQuality> { it.height }.thenByDescending { it.bitrate })
+
+        audioTracks = audioList
+        videoQualities = sortedQualities
+        isAutoQuality = !anyVideoOverrideSelected
+        selectedQualityLabel = if (anyVideoOverrideSelected && overriddenLabel != null) overriddenLabel!! else "Auto"
+        if (detectedSelectedHeight > 0) {
+            activeVideoHeight = detectedSelectedHeight
+        }
+    }
 
     DisposableEffect(streamUrl) {
         val trackSelector = DefaultTrackSelector(context)
@@ -2466,6 +2636,7 @@ private fun InlineWatchPlayer(
             .build()
             .apply {
                 setMediaItem(buildStreamMediaItem(streamUrl))
+                setPlaybackSpeed(playbackSpeed)
                 prepare()
                 playWhenReady = true
             }
@@ -2476,6 +2647,16 @@ private fun InlineWatchPlayer(
                 isPlaying = playing
             }
 
+            override fun onTracksChanged(tracks: Tracks) {
+                syncPlayerTracks(player)
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.height > 0) {
+                    activeVideoHeight = videoSize.height
+                }
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 if (onPlaybackError != null) {
                     onPlaybackError.invoke()
@@ -2483,6 +2664,7 @@ private fun InlineWatchPlayer(
                     triedProxyFallback = true
                     val proxiedUrl = "https://nexiplay.vercel.app/api/proxy-stream?url=${java.net.URLEncoder.encode(streamUrl, "UTF-8")}"
                     player.setMediaItem(buildStreamMediaItem(proxiedUrl))
+                    player.setPlaybackSpeed(playbackSpeed)
                     player.prepare()
                     player.playWhenReady = true
                 } else {
@@ -2493,33 +2675,8 @@ private fun InlineWatchPlayer(
             override fun onPlaybackStateChanged(state: Int) {
                 isBuffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) {
-                    duration = player.duration.coerceAtLeast(0L)
-                    val list = mutableListOf<Triple<androidx.media3.common.TrackGroup, Int, String>>()
-                    var hindiSelected = false
-                    for (group in player.currentTracks.groups) {
-                        if (group.type == C.TRACK_TYPE_AUDIO) {
-                            for (i in 0 until group.length) {
-                                val fmt = group.getTrackFormat(i)
-                                val label = fmt.label?.takeIf { it.isNotBlank() }
-                                    ?: fmt.language?.takeIf { it.isNotBlank() }?.uppercase()
-                                    ?: "Track ${list.size + 1}"
-                                list.add(Triple(group.mediaTrackGroup, i, label))
-                                if (!hindiSelected && (label.contains("hi", ignoreCase = true) || label.contains("hindi", ignoreCase = true))) {
-                                    hindiSelected = true
-                                    selectedAudioLabel = label
-                                    if (!group.isTrackSelected(i)) {
-                                        player.trackSelectionParameters = player.trackSelectionParameters
-                                            .buildUpon()
-                                            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
-                                            .build()
-                                    }
-                                } else if (group.isTrackSelected(i) && !hindiSelected) {
-                                    selectedAudioLabel = label
-                                }
-                            }
-                        }
-                    }
-                    audioTracks = list
+                    duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+                    syncPlayerTracks(player)
                 } else if (state == Player.STATE_ENDED) {
                     onVideoEnded()
                 }
@@ -2533,22 +2690,22 @@ private fun InlineWatchPlayer(
         }
     }
 
-    LaunchedEffect(isPlaying, showControls, exoPlayer) {
+    LaunchedEffect(isPlaying, isBuffering, showControls, exoPlayer) {
         exoPlayer?.let {
             currentPos = it.currentPosition.coerceAtLeast(0L)
-            duration = it.duration.coerceAtLeast(0L)
+            duration = it.duration.takeIf { d -> d != C.TIME_UNSET && d > 0L } ?: 0L
         }
-        while (showControls && isPlaying) {
+        while (showControls && exoPlayer != null) {
             kotlinx.coroutines.delay(500)
             exoPlayer?.let {
                 currentPos = it.currentPosition.coerceAtLeast(0L)
-                duration = it.duration.coerceAtLeast(0L)
+                duration = it.duration.takeIf { d -> d != C.TIME_UNSET && d > 0L } ?: 0L
             }
         }
     }
 
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
+    LaunchedEffect(showControls, isPlaying, showAudioDialog, showSpeedDialog, showQualityDialog) {
+        if (showControls && isPlaying && !showAudioDialog && !showSpeedDialog && !showQualityDialog) {
             kotlinx.coroutines.delay(3500)
             showControls = false
         }
@@ -2619,6 +2776,222 @@ private fun InlineWatchPlayer(
         )
     }
 
+    if (showSpeedDialog) {
+        val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+        AlertDialog(
+            onDismissRequest = { showSpeedDialog = false },
+            containerColor = themeCard(),
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.Speed, contentDescription = null, tint = NexiRed, modifier = Modifier.size(20.dp))
+                    Text("Playback Speed", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary(), fontFamily = InterFont)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    speedOptions.forEach { sp ->
+                        val active = playbackSpeed == sp
+                        val label = if (sp == 1.0f) "1x (Normal)" else formatInlineSpeed(sp)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (active) NexiRed.copy(alpha = 0.2f) else themeBg(),
+                            border = if (active) BorderStroke(1.dp, NexiRed.copy(alpha = 0.45f)) else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    playbackSpeed = sp
+                                    exoPlayer?.setPlaybackSpeed(sp)
+                                    showSpeedDialog = false
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) NexiRed else themeTextPrimary(),
+                                    fontFamily = InterFont
+                                )
+                                Icon(
+                                    imageVector = if (active) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                                    contentDescription = null,
+                                    tint = if (active) NexiRed else themeTextTertiary(),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSpeedDialog = false }) {
+                    Text("Close", color = NexiRed, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
+
+    if (showQualityDialog) {
+        AlertDialog(
+            onDismissRequest = { showQualityDialog = false },
+            containerColor = themeCard(),
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.HighQuality, contentDescription = null, tint = NexiRed, modifier = Modifier.size(20.dp))
+                    Text("Video Quality", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = themeTextPrimary(), fontFamily = InterFont)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    // Auto option (clears manual video track override)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isAutoQuality) NexiRed.copy(alpha = 0.2f) else themeBg(),
+                        border = if (isAutoQuality) BorderStroke(1.dp, NexiRed.copy(alpha = 0.45f)) else null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                exoPlayer?.let { p ->
+                                    p.trackSelectionParameters = p.trackSelectionParameters
+                                        .buildUpon()
+                                        .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                                        .build()
+                                }
+                                isAutoQuality = true
+                                selectedQualityLabel = "Auto"
+                                showQualityDialog = false
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Auto (Recommended)",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isAutoQuality) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isAutoQuality) NexiRed else themeTextPrimary(),
+                                    fontFamily = InterFont
+                                )
+                                val sub = if (activeVideoHeight > 0) "Playing ${activeVideoHeight}p" else "Adjusts automatically to internet speed"
+                                Text(
+                                    text = sub,
+                                    fontSize = 10.sp,
+                                    color = themeTextSecondary(),
+                                    fontFamily = InterFont
+                                )
+                            }
+                            Icon(
+                                imageVector = if (isAutoQuality) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                                contentDescription = null,
+                                tint = if (isAutoQuality) NexiRed else themeTextTertiary(),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    videoQualities.forEach { option ->
+                        val active = !isAutoQuality && selectedQualityLabel == option.label && (
+                            exoPlayer?.currentTracks?.groups?.any { grp ->
+                                grp.mediaTrackGroup == option.group &&
+                                    grp.isTrackSelected(option.trackIndex)
+                            } == true
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (active) NexiRed.copy(alpha = 0.2f) else themeBg(),
+                            border = if (active) BorderStroke(1.dp, NexiRed.copy(alpha = 0.45f)) else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    exoPlayer?.let { p ->
+                                        p.trackSelectionParameters = p.trackSelectionParameters
+                                            .buildUpon()
+                                            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                                            .setOverrideForType(TrackSelectionOverride(option.group, option.trackIndex))
+                                            .build()
+                                    }
+                                    isAutoQuality = false
+                                    selectedQualityLabel = option.label
+                                    if (option.height > 0) activeVideoHeight = option.height
+                                    showQualityDialog = false
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = option.label,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (active) NexiRed else themeTextPrimary(),
+                                        fontFamily = InterFont
+                                    )
+                                    option.detailLabel?.let { detail ->
+                                        Text(
+                                            text = detail,
+                                            fontSize = 10.sp,
+                                            color = themeTextSecondary(),
+                                            fontFamily = InterFont
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    imageVector = if (active) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                                    contentDescription = null,
+                                    tint = if (active) NexiRed else themeTextTertiary(),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (videoQualities.size <= 1) {
+                        val hintText = if (videoQualities.isEmpty() && activeVideoHeight <= 0) {
+                            "Waiting for video stream tracks..."
+                        } else {
+                            "This server provides a single-resolution stream (${if (activeVideoHeight > 0) "${activeVideoHeight}p" else "Original"}). Adaptive HLS servers show multiple qualities here."
+                        }
+                        Text(
+                            text = hintText,
+                            fontSize = 11.sp,
+                            color = themeTextTertiary(),
+                            lineHeight = 15.sp,
+                            fontFamily = InterFont,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showQualityDialog = false }) {
+                    Text("Close", color = NexiRed, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2632,6 +3005,7 @@ private fun InlineWatchPlayer(
                     PlayerView(ctx).apply {
                         this.player = player
                         useController = false
+                        keepScreenOn = shouldKeepScreenOn
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2641,6 +3015,7 @@ private fun InlineWatchPlayer(
                 },
                 update = { pv ->
                     if (pv.player != player) pv.player = player
+                    pv.keepScreenOn = shouldKeepScreenOn
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -2676,6 +3051,62 @@ private fun InlineWatchPlayer(
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+
+                // Top-Right Quick Pills: Quality & Playback Speed
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(horizontal = 10.dp, vertical = if (isFullscreen) 14.dp else 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (!isAutoQuality) NexiRed.copy(alpha = 0.88f) else Color.Black.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, if (!isAutoQuality) NexiRed else Color.White.copy(alpha = 0.2f)),
+                        modifier = Modifier.clickable { showQualityDialog = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Rounded.HighQuality, contentDescription = "Quality", tint = Color.White, modifier = Modifier.size(14.dp))
+                            val qBadge = if (isAutoQuality && activeVideoHeight > 0) "Auto · ${activeVideoHeight}p" else selectedQualityLabel
+                            Text(
+                                text = qBadge,
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                fontFamily = InterFont
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (playbackSpeed != 1.0f) NexiRed.copy(alpha = 0.88f) else Color.Black.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, if (playbackSpeed != 1.0f) NexiRed else Color.White.copy(alpha = 0.2f)),
+                        modifier = Modifier.clickable { showSpeedDialog = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Rounded.Speed, contentDescription = "Speed", tint = Color.White, modifier = Modifier.size(13.dp))
+                            Text(
+                                text = formatInlineSpeed(playbackSpeed),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                fontFamily = InterFont
+                            )
+                        }
                     }
                 }
 
@@ -2784,7 +3215,16 @@ private fun InlineWatchPlayer(
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         Icon(Icons.Default.Language, contentDescription = "Audio", tint = Color.White, modifier = Modifier.size(13.dp))
-                                        Text(selectedAudioLabel, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = InterFont)
+                                        Text(
+                                            text = selectedAudioLabel,
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 80.dp),
+                                            fontFamily = InterFont
+                                        )
                                     }
                                 }
                             }

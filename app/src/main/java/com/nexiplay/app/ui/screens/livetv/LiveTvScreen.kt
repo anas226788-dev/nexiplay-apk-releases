@@ -3,6 +3,7 @@ package com.nexiplay.app.ui.screens.livetv
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -432,11 +433,28 @@ fun LiveTvScreen(navController: NavController) {
                     } else if (tvPlayerMode == "youtube" && !ch.youtubeLiveUrl.isNullOrBlank()) {
                         LiveYoutubeEmbedView(embedUrl = ch.youtubeLiveUrl)
                     } else if (!tvStreamError) {
+                        val tvAwake = activeMode == "tv" && tvPlaying && activeChannel != null && !tvStreamError
+                        DisposableEffect(tvAwake) {
+                            val act = (context as? android.app.Activity)
+                                ?: generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+                                    .filterIsInstance<android.app.Activity>()
+                                    .firstOrNull()
+                            val win = act?.window
+                            if (tvAwake) {
+                                win?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            } else {
+                                win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            }
+                            onDispose {
+                                win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            }
+                        }
                         AndroidView(
                             factory = { ctx ->
                                 PlayerView(ctx).apply {
                                     player = exoPlayer
                                     useController = false
+                                    keepScreenOn = tvAwake
                                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                                     layoutParams = FrameLayout.LayoutParams(
                                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -446,6 +464,7 @@ fun LiveTvScreen(navController: NavController) {
                             },
                             update = { pv ->
                                 pv.player = exoPlayer
+                                pv.keepScreenOn = tvAwake
                             },
                             modifier = Modifier.fillMaxSize()
                         )

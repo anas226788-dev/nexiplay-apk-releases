@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -146,6 +147,20 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
         }
     }
 
+    // Keep screen awake during active video playback in PlayerScreen
+    val shouldKeepAwake = isPlaying || playbackState == Player.STATE_BUFFERING
+    DisposableEffect(shouldKeepAwake, activity) {
+        val window = activity?.window
+        if (shouldKeepAwake) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     // Lock to landscape & setup ExoPlayer
     var triedProxyFallback by remember(url) { mutableStateOf(false) }
 
@@ -271,6 +286,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
                     PlayerView(ctx).apply {
                         this.player = player
                         useController = false
+                        keepScreenOn = shouldKeepAwake
                         this.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -280,6 +296,7 @@ fun PlayerScreen(navController: NavController, encodedUrl: String) {
                 },
                 update = { pv ->
                     pv.resizeMode = resizeMode
+                    pv.keepScreenOn = shouldKeepAwake
                 },
                 modifier = Modifier.fillMaxSize()
             )
