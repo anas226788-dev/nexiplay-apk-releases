@@ -173,7 +173,12 @@ fun ContentDetailScreen(
             }.distinct()
 
             scope.launch {
-                val isAnimeContent = type.equals("anime", ignoreCase = true) || movie.type.equals("anime", ignoreCase = true)
+                val isAnimeContent = type.equals("anime", ignoreCase = true) ||
+                    movie.type.equals("anime", ignoreCase = true) ||
+                    state.categories.any {
+                        it.name.equals("Animation", ignoreCase = true) ||
+                            it.name.equals("Anime", ignoreCase = true)
+                    }
                 val res = WebFeaturesRepository.resolveVaultDownload(
                     isTv = isTv,
                     targetId = targetId,
@@ -200,18 +205,18 @@ fun ContentDetailScreen(
                     val isCloudMirror = res.source.equals("toonplay", ignoreCase = true) ||
                         directTarget?.let { u ->
                             val l = u.lowercase()
-                            l.contains("hubcloud.") || l.contains("gdflix.") || l.contains("drive.google.") || l.contains("mega.nz") || l.contains("terabox.") || l.contains("fpgo.") || l.contains("adhlinks.")
+                            l.contains("hubcloud.") || l.contains("gdflix.") || l.contains("drive.google.") || l.contains("mega.") || l.contains("mediafire.") || l.contains("terabox.") || l.contains("1024terabox.") || l.contains("pcloud.") || l.contains("fpgo.") || l.contains("adhlinks.") || l.contains("animesalt.") || l.contains("razorshell.")
                         } == true
 
                     val safeFileName = (res.fileName?.takeIf { it.isNotBlank() }
-                        ?: "${movie.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}_${if (sNum != null && eNum != null) "S${sNum}E${eNum}_" else ""}${resolvedQuality}.mkv")
+                        ?: "${movie.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}_${if (sNum != null && eNum != null) "S${sNum}E${eNum}_" else ""}${resolvedQuality}.${if (proxyOrDirectTarget?.contains(".mp4", true) == true && proxyOrDirectTarget.contains(".mkv", true) == false) "mp4" else "mkv"}")
                     var enqueuedNatively = false
 
                     if (isCloudMirror) {
                         val cloudUrl = res.url ?: directTarget ?: proxyOrDirectTarget
                         if (!cloudUrl.isNullOrBlank()) {
                             openLink(cloudUrl, context, navController)
-                            Toast.makeText(context, "Opening ToonPlay cloud download ($resolvedQuality)...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Opening cloud download mirror ($resolvedQuality)...", Toast.LENGTH_SHORT).show()
                         }
                     } else if (directTarget != null && proxyOrDirectTarget != null) {
                         try {
@@ -219,7 +224,7 @@ fun ContentDetailScreen(
                             if (dm != null) {
                                 // Use the Vercel proxy URL (res.url) so mobile ISPs that block *.workers.dev still download at full speed
                                 val request = android.app.DownloadManager.Request(Uri.parse(proxyOrDirectTarget)).apply {
-                                    addRequestHeader("Referer", "https://vidvault.to/")
+                                    addRequestHeader("Referer", when { proxyOrDirectTarget.contains("animeheaven.", true) -> "https://animeheaven.me/"; proxyOrDirectTarget.contains("hakunaymatata.", true) -> "https://netfilm.world/"; else -> "https://vidvault.to/" })
                                     addRequestHeader(
                                         "User-Agent",
                                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -231,7 +236,7 @@ fun ContentDetailScreen(
                                     setAllowedOverRoaming(true)
                                     setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safeFileName)
                                 }
-                                dm.enqueue(request)
+                                val dlId = dm.enqueue(request); com.nexiplay.app.data.repository.DownloadRepository(context).saveDownloadRecord(dlId, "${movie.title}${if (sNum != null && eNum != null) " S${sNum}E${eNum}" else ""} ($resolvedQuality)", proxyOrDirectTarget)
                                 enqueuedNatively = true
                                 Toast.makeText(context, "Download started in notification bar ($resolvedQuality)!", Toast.LENGTH_LONG).show()
                             }
@@ -3317,11 +3322,20 @@ fun getAvailableServers(
     return uniqueServers
 }
 // Sites that need Chrome's full download UI
-private val CHROME_DOWNLOAD_HOSTS = listOf("mega.nz", "mega.co.nz", "mega.io", "pixeldrain.com", "pixeldrain.dev", "pcloud.com", "pcloud.link")
+// Sites that need Chrome's full download UI or native app handler
+private val CHROME_DOWNLOAD_HOSTS = listOf(
+    "mega.nz", "mega.co.nz", "mega.io",
+    "pixeldrain.com", "pixeldrain.dev",
+    "pcloud.com", "pcloud.link",
+    "mediafire.com",
+    "drive.google.com", "docs.google.com",
+    "terabox.com", "1024terabox.com", "teraboxapp.com",
+    "animesalt.cx"
+)
 
 private fun needsChromeDownload(url: String): Boolean {
     val lowerUrl = url.lowercase()
-    if (lowerUrl.contains("pcloud.") || lowerUrl.contains("pixeldrain.") || lowerUrl.contains("mega.")) {
+    if (lowerUrl.contains("pcloud.") || lowerUrl.contains("pixeldrain.") || lowerUrl.contains("mega.") || lowerUrl.contains("mediafire.com") || lowerUrl.contains("drive.google.com") || lowerUrl.contains("terabox.") || lowerUrl.contains("1024terabox.") || lowerUrl.contains("animesalt.")) {
         return true
     }
     val host = try { java.net.URI(lowerUrl).host ?: "" } catch (_: Exception) { "" }

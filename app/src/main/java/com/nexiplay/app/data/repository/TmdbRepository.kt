@@ -301,8 +301,8 @@ object TmdbRepository {
                 val mediaType = obj["media_type"]?.jsonPrimitive?.contentOrNull ?: "movie"
                 if (mediaType == "person") return@mapNotNull null
                 val genreIds = obj["genre_ids"]?.jsonArray?.mapNotNull { it.jsonPrimitive.intOrNull } ?: emptyList()
-                val origLang = obj["original_language"]?.jsonPrimitive?.contentOrNull
-                val isAnime = genreIds.contains(16) && origLang == "ja"
+                val origLang = obj["original_language"]?.jsonPrimitive?.contentOrNull?.lowercase()
+                val isAnime = genreIds.contains(16) && origLang in setOf("ja", "zh", "ko")
                 val resolvedType = when {
                     isAnime -> "anime"
                     mediaType == "tv" -> "series"
@@ -372,8 +372,8 @@ object TmdbRepository {
             Category(id = gId.toString(), name = gName, slug = gName.lowercase().replace(" ", "-"))
         }
 
-        val origLang = detailObj["original_language"]?.jsonPrimitive?.contentOrNull ?: "en"
-        val isAnime = categories.any { it.id == "16" } && origLang == "ja"
+        val origLang = (detailObj["original_language"]?.jsonPrimitive?.contentOrNull ?: "en").lowercase()
+        val isAnime = categories.any { it.id == "16" } && origLang in setOf("ja", "zh", "ko")
         val resolvedType = when {
             isAnime || cleanType == "anime" -> "anime"
             isTv -> "series"
