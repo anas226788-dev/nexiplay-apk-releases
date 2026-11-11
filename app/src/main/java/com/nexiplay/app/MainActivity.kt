@@ -10,10 +10,6 @@ import com.nexiplay.app.ui.navigation.NexiPlayNavHost
 import com.nexiplay.app.ui.navigation.NotificationRouter
 import com.nexiplay.app.ui.theme.NexiPlayTheme
 import com.onesignal.OneSignal
-import com.onesignal.notifications.INotificationClickEvent
-import com.onesignal.notifications.INotificationClickListener
-import com.onesignal.notifications.INotificationLifecycleListener
-import com.onesignal.notifications.INotificationWillDisplayEvent
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.CoroutineScope
@@ -43,40 +39,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Register OneSignal listeners + background syncs off the critical first-frame render path
-        try {
-            OneSignal.Notifications.addForegroundLifecycleListener(object : INotificationLifecycleListener {
-                override fun onWillDisplay(event: INotificationWillDisplayEvent) {
-                    event.notification.display()
-                }
-            })
-            OneSignal.Notifications.addClickListener(object : INotificationClickListener {
-                override fun onClick(event: INotificationClickEvent) {
-                    val data = event.notification.additionalData
-                    val sNum = data?.optInt("season_number", -1)?.takeIf { it > 0 }
-                        ?: data?.optInt("season", -1)?.takeIf { it > 0 }
-                        ?: data?.optString("season_number")?.toIntOrNull()
-                        ?: data?.optString("season")?.toIntOrNull()
-                    val eNum = data?.optInt("episode_number", -1)?.takeIf { it > 0 }
-                        ?: data?.optInt("episode", -1)?.takeIf { it > 0 }
-                        ?: data?.optString("episode_number")?.toIntOrNull()
-                        ?: data?.optString("episode")?.toIntOrNull()
-
-                    NotificationRouter.open(
-                        link = data?.optString("deep_link")?.takeIf { !it.isNullOrBlank() && it != "null" }
-                            ?: data?.optString("url")?.takeIf { !it.isNullOrBlank() && it != "null" }
-                            ?: event.notification.launchURL,
-                        screen = data?.optString("screen")?.takeIf { !it.isNullOrBlank() && it != "null" },
-                        contentType = data?.optString("content_type")?.takeIf { !it.isNullOrBlank() && it != "null" },
-                        slug = data?.optString("slug")?.takeIf { !it.isNullOrBlank() && it != "null" },
-                        seasonNumber = sNum,
-                        episodeNumber = eNum,
-                    )
-                }
-            })
-        } catch (e: Throwable) {
-            e.printStackTrace()
-        }
+        // Ensure OneSignal listeners & channels are attached safely (idempotent)
+        EpisodeUpdatesNotificationManager.attachOneSignalHandlers(this)
 
         EpisodeUpdatesNotificationManager.startLiveWatcher(this)
         SessionTracker.startSession()
@@ -84,7 +48,9 @@ class MainActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.IO).launch {
             com.nexiplay.app.data.util.AdManager.syncAdFreeStatus(this@MainActivity)
             kotlinx.coroutines.delay(1_800L)
-            OneSignal.Notifications.requestPermission(true)
+            if (!OneSignal.Notifications.permission) {
+                OneSignal.Notifications.requestPermission(false)
+            }
             try {
                 SupabaseClient.main.auth.awaitInitialization()
             } catch (_: Exception) {}

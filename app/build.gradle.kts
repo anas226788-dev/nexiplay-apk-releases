@@ -134,6 +134,9 @@ dependencies {
     // ── OneSignal (Push Notifications) ──
     implementation("com.onesignal:OneSignal:5.1.11")
 
+    // ── Background Work (Offline / Killed-State Episode & Notice Sync) ──
+    implementation("androidx.work:work-runtime-ktx:2.8.1")
+
     // ── Datastore (local preferences) ──
     implementation("androidx.datastore:datastore-preferences:1.1.2")
 

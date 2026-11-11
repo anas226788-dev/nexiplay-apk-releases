@@ -19,6 +19,12 @@ import com.nexiplay.app.data.model.Notice
 import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.UpdateItem
 import com.nexiplay.app.data.models.Notification
+import com.nexiplay.app.ui.navigation.NotificationRouter
+import com.onesignal.OneSignal
+import com.onesignal.notifications.INotificationClickEvent
+import com.onesignal.notifications.INotificationClickListener
+import com.onesignal.notifications.INotificationLifecycleListener
+import com.onesignal.notifications.INotificationWillDisplayEvent
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
@@ -35,6 +41,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 object EpisodeUpdatesNotificationManager {
     const val CHANNEL_EPISODES = "nexiplay_episodes_channel"
@@ -54,7 +62,125 @@ object EpisodeUpdatesNotificationManager {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isChecking = AtomicBoolean(false)
+    private val oneSignalHandlersAttached = AtomicBoolean(false)
     private var watcherJob: Job? = null
+
+    fun canPostNotifications(context: Context): Boolean {
+        val managerCompat = NotificationManagerCompat.from(context.applicationContext)
+        if (!managerCompat.areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        return true
+    }
+
+    /**
+     * Registers OneSignal lifecycle & click listeners at Application startup so cold-start
+     * notification taps and foreground deliveries always route cleanly even before Activity creation.
+     */
+    fun attachOneSignalHandlers(context: Context) {
+        if (!oneSignalHandlersAttached.compareAndSet(false, true)) return
+        val appContext = context.applicationContext
+        initChannel(appContext)
+
+        runCatching {
+            OneSignal.Notifications.addForegroundLifecycleListener(object : INotificationLifecycleListener {
+                override fun onWillDisplay(event: INotificationWillDisplayEvent) {
+                    initChannel(appContext)
+                    markRemotePayloadSeen(appContext, event.notification.additionalData)
+                    event.notification.display()
+                }
+            })
+
+            OneSignal.Notifications.addClickListener(object : INotificationClickListener {
+                override fun onClick(event: INotificationClickEvent) {
+                    val data = event.notification.additionalData
+                    markRemotePayloadSeen(appContext, data)
+
+                    val sNum = parsePositiveInt(data, "season_number", "season")
+                    val eNum = parsePositiveInt(data, "episode_number", "episode")
+                    NotificationRouter.open(
+                        link = optCleanString(data, "deep_link")
+                            ?: optCleanString(data, "url")
+                            ?: optCleanString(data, "target_url")
+                            ?: event.notification.launchURL,
+                        screen = optCleanString(data, "screen"),
+                        contentType = optCleanString(data, "content_type"),
+                        slug = optCleanString(data, "slug"),
+                        seasonNumber = sNum,
+                        episodeNumber = eNum,
+                    )
+                }
+            })
+        }
+    }
+
+    private fun optCleanString(data: JSONObject?, key: String): String? {
+        val value = data?.optString(key)?.trim() ?: return null
+        return value.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+    }
+
+    private fun parsePositiveInt(data: JSONObject?, primaryKey: String, fallbackKey: String): Int? {
+        if (data == null) return null
+        return data.optInt(primaryKey, -1).takeIf { it > 0 }
+            ?: data.optInt(fallbackKey, -1).takeIf { it > 0 }
+            ?: data.optString(primaryKey).toIntOrNull()?.takeIf { it > 0 }
+            ?: data.optString(fallbackKey).toIntOrNull()?.takeIf { it > 0 }
+    }
+
+    private fun markRemotePayloadSeen(context: Context, data: JSONObject?) {
+        if (data == null) return
+        scope.launch {
+            runCatching {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val slug = optCleanString(data, "slug")
+                val contentType = optCleanString(data, "content_type")
+                val movieId = optCleanString(data, "movie_id")
+                val noticeId = optCleanString(data, "notice_id")
+                val notifId = optCleanString(data, "notification_id")
+                val trackingKey = optCleanString(data, "tracking_key")
+                val sNum = parsePositiveInt(data, "season_number", "season") ?: 0
+                val eNum = parsePositiveInt(data, "episode_number", "episode") ?: 0
+                val uType = optCleanString(data, "update_type")?.lowercase()
+                    ?: if (eNum > 0) "episode" else if (sNum > 0) "season" else "movie"
+
+                val editor = prefs.edit()
+                if (!slug.isNullOrBlank()) {
+                    val cleanSlug = cleanContentSlug(slug).lowercase()
+                    val computedKey = trackingKey ?: "${cleanSlug}_${uType}_s${sNum}_e${eNum}"
+                    val updateIds = prefs.getStringSet(KEY_NOTIFIED_UPDATE_IDS, emptySet()).orEmpty().toMutableSet()
+                    updateIds.add(computedKey)
+                    editor.putStringSet(KEY_NOTIFIED_UPDATE_IDS, updateIds)
+                } else if (!trackingKey.isNullOrBlank()) {
+                    val updateIds = prefs.getStringSet(KEY_NOTIFIED_UPDATE_IDS, emptySet()).orEmpty().toMutableSet()
+                    updateIds.add(trackingKey)
+                    editor.putStringSet(KEY_NOTIFIED_UPDATE_IDS, updateIds)
+                }
+
+                if (!movieId.isNullOrBlank()) {
+                    val movieIds = prefs.getStringSet(KEY_NOTIFIED_MOVIE_IDS, emptySet()).orEmpty().toMutableSet()
+                    movieIds.add(movieId)
+                    editor.putStringSet(KEY_NOTIFIED_MOVIE_IDS, movieIds)
+                    if (eNum > 0) {
+                        val savedEp = prefs.getInt(KEY_RUNNING_EP_PREFIX + movieId, -1)
+                        if (eNum > savedEp) editor.putInt(KEY_RUNNING_EP_PREFIX + movieId, eNum)
+                    }
+                }
+                if (!noticeId.isNullOrBlank()) {
+                    val noticeIds = prefs.getStringSet(KEY_NOTIFIED_NOTICE_IDS, emptySet()).orEmpty().toMutableSet()
+                    noticeIds.add(noticeId)
+                    editor.putStringSet(KEY_NOTIFIED_NOTICE_IDS, noticeIds)
+                }
+                if (!notifId.isNullOrBlank()) {
+                    val dbIds = prefs.getStringSet(KEY_NOTIFIED_DB_NOTIF_IDS, emptySet()).orEmpty().toMutableSet()
+                    dbIds.add(notifId)
+                    editor.putStringSet(KEY_NOTIFIED_DB_NOTIF_IDS, dbIds)
+                }
+                editor.apply()
+            }
+        }
+    }
 
     fun initChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -127,6 +253,17 @@ object EpisodeUpdatesNotificationManager {
         }
     }
 
+    /**
+     * Suspends until a full catalog/episode/notice notification sync completes.
+     * Intended for background WorkManager wakes when the app UI is not active.
+     */
+    suspend fun syncOnceInBackground(context: Context): Boolean {
+        val appContext = context.applicationContext
+        return withContext(Dispatchers.IO) {
+            syncAllNotificationsInternal(appContext)
+        }
+    }
+
     fun checkAndNotifyWithItems(context: Context, items: List<UpdateItem>) {
         if (items.isEmpty()) return
         val appContext = context.applicationContext
@@ -146,10 +283,14 @@ object EpisodeUpdatesNotificationManager {
         }
     }
 
-    private suspend fun syncAllNotificationsInternal(context: Context) {
-        if (!isChecking.compareAndSet(false, true)) return
-        try {
+    private suspend fun syncAllNotificationsInternal(context: Context): Boolean {
+        if (!isChecking.compareAndSet(false, true)) return true
+        return try {
+            val appContext = context.applicationContext
+            initChannel(appContext)
             val db = SupabaseClient.main
+            // In background Worker wakes, Supabase Auth loads persisted session asynchronously
+            runCatching { db.auth.awaitInitialization() }
             val uid = runCatching { db.auth.currentUserOrNull()?.id }.getOrNull()
 
             coroutineScope {
@@ -240,7 +381,7 @@ object EpisodeUpdatesNotificationManager {
                     .distinctBy { buildUpdateTrackingKey(it) }
 
                 processUpdateAndRunningCatalog(
-                    context = context,
+                    context = appContext,
                     updates = mergedUpdates,
                     runningMovies = runningDef.await(),
                     latestMovies = latestMoviesDef.await(),
@@ -248,8 +389,10 @@ object EpisodeUpdatesNotificationManager {
                     notices = noticesDef.await(),
                 )
             }
+            true
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         } finally {
             isChecking.set(false)
         }
@@ -564,13 +707,15 @@ object EpisodeUpdatesNotificationManager {
         context: Context,
         notice: Notice,
     ) {
+        val cleanText = stripHtml(notice.content)
+        if (cleanText.isBlank()) return
         sendRichContentNotification(
             context = context,
             notificationId = ("notice_${notice.id}".hashCode() and 0x7FFFFFFF),
             channelId = CHANNEL_ALERTS,
             subText = "OFFICIAL ANNOUNCEMENT",
             title = "📢 Nexiplay Official Update",
-            message = notice.content.trim(),
+            message = cleanText,
             posterUrl = notice.imageUrl,
             contentType = null,
             slug = null,
@@ -578,6 +723,16 @@ object EpisodeUpdatesNotificationManager {
             episodeNumber = null,
             customDeepLink = "nexiplay://notifications",
         )
+    }
+
+    private fun stripHtml(raw: String): String {
+        return raw.replace(Regex("<[^>]*>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 
     /**
@@ -600,6 +755,7 @@ object EpisodeUpdatesNotificationManager {
         episodeNumber: Int?,
         customDeepLink: String? = null,
     ) {
+        initChannel(context.applicationContext)
         val hasContentTarget = !contentType.isNullOrBlank() && !slug.isNullOrBlank()
         val querySuffix = buildString {
             if (seasonNumber != null || episodeNumber != null) {

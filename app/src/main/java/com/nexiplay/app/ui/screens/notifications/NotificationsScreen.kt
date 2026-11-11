@@ -37,11 +37,21 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nexiplay.app.data.models.Notification
+import com.nexiplay.app.data.util.EpisodeUpdatesNotificationManager
 import com.nexiplay.app.ui.components.ErrorView
 import com.nexiplay.app.ui.components.NotificationsSkeleton
 import com.nexiplay.app.ui.navigation.NotificationRouter
 import com.nexiplay.app.ui.theme.*
+import com.onesignal.OneSignal
+import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -75,6 +85,22 @@ fun NotificationsScreen(
     val state by viewModel.state.collectAsState()
     var confirmClearAll by remember { mutableStateOf(false) }
     var activeFilter by remember { mutableStateOf(NotificationFilter.ALL) }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
+    var notificationsEnabled by remember {
+        mutableStateOf(EpisodeUpdatesNotificationManager.canPostNotifications(context))
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsEnabled = EpisodeUpdatesNotificationManager.canPostNotifications(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val unreadCount = remember(state.notifications) {
         state.notifications.count { !it.isRead }
@@ -325,6 +351,75 @@ fun NotificationsScreen(
                 }
             }
             HorizontalDivider(color = Color(0xFF1D1829), thickness = 1.dp)
+        }
+
+        if (!notificationsEnabled) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF201633))
+                    .border(1.dp, Color(0xFF53399C), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(NotifViolet.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.NotificationsActive,
+                        contentDescription = null,
+                        tint = NotifVioletLight,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Turn on push notifications",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "Allow alerts to receive new episode & release notifications outside the app.",
+                        color = NotifTextSub,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            runCatching { OneSignal.Notifications.requestPermission(true) }
+                            val stillBlocked = !EpisodeUpdatesNotificationManager.canPostNotifications(context)
+                            notificationsEnabled = !stillBlocked
+                            if (stillBlocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = "Enable",
+                        color = NotifVioletLight,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
         }
 
         // ── Notification Feed ──

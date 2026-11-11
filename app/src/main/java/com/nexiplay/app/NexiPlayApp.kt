@@ -29,12 +29,19 @@ class NexiPlayApp : Application(), SingletonImageLoader.Factory {
             com.nexiplay.app.data.util.AdManager.loadConfig(com.nexiplay.app.data.SupabaseClient.main)
         }
 
+        // Pre-register notification channels before any background push or worker fires
+        com.nexiplay.app.data.util.EpisodeUpdatesNotificationManager.initChannel(this)
+
         // Initialize OneSignal synchronously on main thread as required by OneSignal SDK
         try {
             OneSignal.initWithContext(this, "69822dc3-4533-4b09-b105-d0ddaeb22c1f")
+            com.nexiplay.app.data.util.EpisodeUpdatesNotificationManager.attachOneSignalHandlers(this)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
+        // Schedule resilient 15-min background WorkManager sync off the splash/main thread
+        com.nexiplay.app.data.util.NotificationSyncWorker.schedulePeriodicAsync(this)
     }
 
     // High-performance unified image caching engine for 120fps zero-jank scrolling
