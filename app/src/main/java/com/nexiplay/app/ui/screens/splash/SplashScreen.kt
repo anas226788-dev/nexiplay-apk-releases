@@ -1,5 +1,6 @@
 package com.nexiplay.app.ui.screens.splash
 
+import android.graphics.BitmapFactory
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -33,20 +34,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -62,30 +66,48 @@ import com.nexiplay.app.ui.theme.NexiRedLight
 import com.nexiplay.app.ui.theme.SuccessGreen
 import com.nexiplay.app.ui.theme.TextGray
 import com.nexiplay.app.ui.theme.TextWhite
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SplashScreen(navController: NavController) {
+    val context = LocalContext.current
     var startAnimation by remember { mutableStateOf(false) }
 
+    // Decode 3D emblem bitmap off the Main thread so Frame 1 opens instantaneously without UI freeze
+    val emblemBitmap by produceState<ImageBitmap?>(initialValue = null, context) {
+        value = withContext(Dispatchers.Default) {
+            try {
+                val opts = BitmapFactory.Options().apply {
+                    inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+                }
+                BitmapFactory.decodeResource(context.resources, R.drawable.ic_emblem_clean, opts)
+                    ?.asImageBitmap()
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     val emblemScale by animateFloatAsState(
-        targetValue = if (startAnimation) 1f else 0.68f,
+        targetValue = if (startAnimation) 1f else 0.78f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "emblemScale"
     )
 
     val contentAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec = tween(durationMillis = 550, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
         label = "contentAlpha"
     )
 
     val progressFraction by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0.08f,
-        animationSpec = tween(durationMillis = 1250, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 720, easing = FastOutSlowInEasing),
         label = "progressFraction"
     )
 
@@ -94,26 +116,75 @@ fun SplashScreen(navController: NavController) {
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 4200, easing = LinearEasing),
+            animation = tween(durationMillis = 3600, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "orbitAngle"
     )
 
     val pulseGlow by infiniteTransition.animateFloat(
-        initialValue = 0.85f,
-        targetValue = 1.12f,
+        initialValue = 0.88f,
+        targetValue = 1.10f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulseGlow"
     )
 
+    // Pre-allocated Brushes so zero objects are allocated during animation frames
+    val bgBrush = remember {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0E0A1A),
+                Color(0xFF090710),
+                Color(0xFF06050B)
+            )
+        )
+    }
+    val spotlightBrush = remember {
+        Brush.radialGradient(
+            colors = listOf(
+                Color(0xFF9273F5).copy(alpha = 0.28f),
+                Color(0xFF6D28D9).copy(alpha = 0.10f),
+                Color.Transparent
+            )
+        )
+    }
+    val orbitalSweepBrush = remember {
+        Brush.sweepGradient(
+            listOf(
+                Color.Transparent,
+                Color(0xFF9273F5).copy(alpha = 0.88f),
+                Color(0xFFB09AFF),
+                Color(0xFF5C46B2),
+                Color.Transparent
+            )
+        )
+    }
+    val wordmarkBrush = remember {
+        Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFFC4B5FD),
+                Color(0xFF9273F5),
+                Color(0xFF7C3AED)
+            )
+        )
+    }
+    val progressBrush = remember {
+        Brush.horizontalGradient(
+            colors = listOf(
+                NexiRed,
+                NexiRedLight,
+                SuccessGreen
+            )
+        )
+    }
+
     LaunchedEffect(Unit) {
         startAnimation = true
         val hasPendingDeepLink = !com.nexiplay.app.ui.navigation.NotificationRouter.pendingRoute.value.isNullOrBlank()
-        delay(if (hasPendingDeepLink) 420L else 1380L)
+        delay(if (hasPendingDeepLink) 260L else 820L)
         navController.navigate(Screen.Home.route) {
             popUpTo(Screen.Splash.route) { inclusive = true }
             launchSingleTop = true
@@ -123,34 +194,21 @@ fun SplashScreen(navController: NavController) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0E0A1A),
-                        Color(0xFF090710),
-                        Color(0xFF06050B)
-                    )
-                )
-            ),
+            .background(bgBrush),
         contentAlignment = Alignment.Center
     ) {
-        // Ambient background radial studio spotlight
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width * 0.5f, size.height * 0.44f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF9273F5).copy(alpha = 0.24f * pulseGlow),
-                        Color(0xFF6D28D9).copy(alpha = 0.08f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = size.minDimension * 0.62f
-                ),
-                radius = size.minDimension * 0.62f,
-                center = center
-            )
-        }
+        // GPU-only ambient spotlight (no per-frame Canvas shader allocation)
+        Box(
+            modifier = Modifier
+                .size(340.dp)
+                .graphicsLayer {
+                    scaleX = pulseGlow
+                    scaleY = pulseGlow
+                    alpha = 0.85f
+                    translationY = -48f
+                }
+                .background(spotlightBrush, CircleShape)
+        )
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -164,16 +222,14 @@ fun SplashScreen(navController: NavController) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(188.dp)
+                    .size(180.dp)
                     .graphicsLayer {
                         scaleX = emblemScale
                         scaleY = emblemScale
                     }
             ) {
-                // Rotating dual-arc orbital ring
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val ringStroke = 2.5.dp.toPx()
-                    // Subtle outer glass ring
                     drawCircle(
                         color = Color.White.copy(alpha = 0.06f),
                         radius = size.minDimension * 0.46f,
@@ -182,15 +238,7 @@ fun SplashScreen(navController: NavController) {
 
                     rotate(degrees = orbitAngle) {
                         drawArc(
-                            brush = Brush.sweepGradient(
-                                listOf(
-                                    Color.Transparent,
-                                    Color(0xFF9273F5).copy(alpha = 0.85f),
-                                    Color(0xFFB09AFF),
-                                    Color(0xFF5C46B2),
-                                    Color.Transparent
-                                )
-                            ),
+                            brush = orbitalSweepBrush,
                             startAngle = 0f,
                             sweepAngle = 220f,
                             useCenter = false,
@@ -199,16 +247,17 @@ fun SplashScreen(navController: NavController) {
                     }
                 }
 
-                // Clean Transparent 3D 'N' Play Emblem (no square box, no baked-in text)
-                Image(
-                    painter = painterResource(id = R.drawable.ic_emblem_clean),
-                    contentDescription = "NexiPlay Emblem",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(144.dp)
-                )
+                emblemBitmap?.let { bmp ->
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = "NexiPlay Emblem",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(140.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // ── Crisp Vector Typography Wordmark (`NEXIPLAY`) ──
             Text(
@@ -223,13 +272,7 @@ fun SplashScreen(navController: NavController) {
                     }
                     withStyle(
                         SpanStyle(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(
-                                    Color(0xFFC4B5FD),
-                                    Color(0xFF9273F5),
-                                    Color(0xFF7C3AED)
-                                )
-                            ),
+                            brush = wordmarkBrush,
                             fontWeight = FontWeight.Black
                         )
                     ) {
@@ -289,9 +332,9 @@ fun SplashScreen(navController: NavController) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(34.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            // ── Sleek Industrial Progress Bar ──
+            // ── GPU-only Progress Bar (zero per-frame re-layout) ──
             Box(
                 modifier = Modifier
                     .width(156.dp)
@@ -301,18 +344,14 @@ fun SplashScreen(navController: NavController) {
             ) {
                 Box(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .fillMaxHeight()
-                        .fillMaxWidth(progressFraction)
+                        .graphicsLayer {
+                            scaleX = progressFraction
+                            transformOrigin = TransformOrigin(0f, 0.5f)
+                        }
                         .clip(RoundedCornerShape(50))
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    NexiRed,
-                                    NexiRedLight,
-                                    SuccessGreen
-                                )
-                            )
-                        )
+                        .background(progressBrush)
                 )
             }
         }

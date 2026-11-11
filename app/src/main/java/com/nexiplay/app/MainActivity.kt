@@ -24,14 +24,26 @@ import com.nexiplay.app.data.model.UserProfile
 import io.github.jan.supabase.postgrest.query.Columns
 
 class MainActivity : ComponentActivity() {
+    private var launchedAtMs = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        launchedAtMs = System.currentTimeMillis()
         enableEdgeToEdge()
 
-        EpisodeUpdatesNotificationManager.initChannel(this)
         handleIntentData(intent)
-        EpisodeUpdatesNotificationManager.startLiveWatcher(this)
 
+        // Register activity reference without blocking onCreate
+        com.nexiplay.app.data.util.AdManager.registerActivity(this)
+
+        // Render Splash Screen immediately on Frame 1 with zero heavy SDK/SharedPrefs/IPC overhead
+        setContent {
+            NexiPlayTheme {
+                NexiPlayNavHost()
+            }
+        }
+
+        // Register OneSignal listeners + background syncs off the critical first-frame render path
         try {
             OneSignal.Notifications.addForegroundLifecycleListener(object : INotificationLifecycleListener {
                 override fun onWillDisplay(event: INotificationWillDisplayEvent) {
@@ -65,30 +77,27 @@ class MainActivity : ComponentActivity() {
         } catch (e: Throwable) {
             e.printStackTrace()
         }
-        
-        com.nexiplay.app.data.util.AdManager.syncAdFreeStatus(this)
-        
-        // Register this activity for Unity LevelPlay initialization
-        com.nexiplay.app.data.util.AdManager.registerActivity(this)
-        
+
+        EpisodeUpdatesNotificationManager.startLiveWatcher(this)
         SessionTracker.startSession()
-        
-        // Link OneSignal user & Request Permission + Sync VIP/Elite ad-free status
+
         CoroutineScope(Dispatchers.IO).launch {
+            com.nexiplay.app.data.util.AdManager.syncAdFreeStatus(this@MainActivity)
+            kotlinx.coroutines.delay(1_800L)
             OneSignal.Notifications.requestPermission(true)
             try {
                 SupabaseClient.main.auth.awaitInitialization()
             } catch (_: Exception) {}
-            
+
             val uid = SupabaseClient.main.auth.currentUserOrNull()?.id
             if (uid != null) {
                 OneSignal.login(uid)
-                
+
                 try {
                     val p = SupabaseClient.main.from("profiles")
                         .select(Columns.list("id", "ad_free_until", "vip_badge", "vip_badge_expires", "double_boost_until")) { filter { eq("id", uid) } }
                         .decodeSingleOrNull<UserProfile>()
-                    
+
                     if (p != null) {
                         com.nexiplay.app.data.util.AdManager.syncProfilePerks(
                             context = this@MainActivity,
@@ -101,12 +110,6 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-            }
-        }
-        
-        setContent {
-            NexiPlayTheme {
-                NexiPlayNavHost()
             }
         }
     }
@@ -158,7 +161,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        EpisodeUpdatesNotificationManager.checkAndNotifyNewUpdates(this)
+        if (System.currentTimeMillis() - launchedAtMs > 12_000L) {
+            EpisodeUpdatesNotificationManager.checkAndNotifyNewUpdates(this)
+        }
         try { com.ironsource.mediationsdk.IronSource.onResume(this) } catch (_: Exception) {}
     }
 

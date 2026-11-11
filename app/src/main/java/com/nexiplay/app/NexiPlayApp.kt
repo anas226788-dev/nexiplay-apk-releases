@@ -12,8 +12,8 @@ import coil3.request.crossfade
 import com.onesignal.OneSignal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okio.Path.Companion.toPath
@@ -23,17 +23,10 @@ class NexiPlayApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize AdManager & Ad SDKs on background IO thread
+        // Defer remote ad config fetch slightly so Activity & Splash Frame 1 never contend with Supabase/Ktor init
         CoroutineScope(Dispatchers.IO).launch {
+            delay(350L)
             com.nexiplay.app.data.util.AdManager.loadConfig(com.nexiplay.app.data.SupabaseClient.main)
-            withContext(Dispatchers.Main) {
-                if (com.nexiplay.app.data.util.AdManager.startioAppId.isNotEmpty()) {
-                    com.nexiplay.app.data.util.AdManager.initStartIo(
-                        this@NexiPlayApp,
-                        com.nexiplay.app.data.util.AdManager.startioAppId
-                    )
-                }
-            }
         }
 
         // Initialize OneSignal synchronously on main thread as required by OneSignal SDK

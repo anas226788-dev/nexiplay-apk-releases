@@ -18,7 +18,11 @@ class GlobalNoticeViewModel : ViewModel() {
     private val _dismissedNoticeIds = MutableStateFlow<Set<String>>(emptySet())
     val dismissedNoticeIds = _dismissedNoticeIds.asStateFlow()
 
-    init {
+    private var hasInitialized = false
+
+    fun ensureLoaded() {
+        if (hasInitialized) return
+        hasInitialized = true
         fetchNotices()
     }
 

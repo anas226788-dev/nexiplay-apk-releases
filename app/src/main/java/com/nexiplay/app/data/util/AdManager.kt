@@ -76,7 +76,9 @@ object AdManager {
     var doubleBoostUntil: String? = null // ISO date string for 2x coin boost expiry
 
     private var isUnityInitialized = false
+    private var isStartIoInitialized = false
     @Volatile var isConfigLoaded = false
+    @Volatile private var isStartupReadyForAds = false
     private var pendingActivity: java.lang.ref.WeakReference<Activity>? = null
     private val _premiumState = MutableStateFlow(false)
     val premiumState: StateFlow<Boolean> = _premiumState.asStateFlow()
@@ -84,15 +86,32 @@ object AdManager {
     val badgeUpdateTick: StateFlow<Long> = _badgeUpdateTick.asStateFlow()
 
     /**
-     * Register activity for deferred Unity initialization.
-     * If config is already loaded, initializes immediately.
-     * If not, stores a weak ref and initializes when config loads.
+     * Register activity for deferred ad SDK initialization (executed post-splash so launch is instant).
      */
     fun registerActivity(activity: Activity) {
-        if (isConfigLoaded && unityAppKey.isNotEmpty()) {
+        pendingActivity = java.lang.ref.WeakReference(activity)
+        if (isStartupReadyForAds && isConfigLoaded) {
+            initializeConfiguredAdSdks(activity)
+        }
+    }
+
+    /**
+     * Called once the app leaves SplashScreen so Start.io / IronSource never block cold-start frames.
+     */
+    fun markStartupReadyForAds(activity: Activity) {
+        isStartupReadyForAds = true
+        pendingActivity = java.lang.ref.WeakReference(activity)
+        if (isConfigLoaded) {
+            initializeConfiguredAdSdks(activity)
+        }
+    }
+
+    private fun initializeConfiguredAdSdks(activity: Activity) {
+        if (startioAppId.isNotEmpty() && !isStartIoInitialized) {
+            initStartIo(activity.applicationContext, startioAppId)
+        }
+        if (unityAppKey.isNotEmpty() && !isUnityInitialized) {
             initUnityLevelPlay(activity, unityAppKey)
-        } else {
-            pendingActivity = java.lang.ref.WeakReference(activity)
         }
     }
 
@@ -316,7 +335,8 @@ object AdManager {
     }
 
     fun initStartIo(context: Context, appId: String) {
-        if (appId.isNotEmpty()) {
+        if (appId.isNotEmpty() && !isStartIoInitialized) {
+            isStartIoInitialized = true
             StartAppSDK.init(context, appId, false)
             StartAppSDK.setTestAdsEnabled(isTestAdsEnabled)
             if (!isAppOpenEnabled) {
@@ -392,14 +412,13 @@ object AdManager {
 
                     isConfigLoaded = true
 
-                    // Trigger deferred Unity initialization if activity was registered before config loaded
-                    if (unityAppKey.isNotEmpty()) {
+                    // Trigger deferred Ad SDK initialization only after Splash finishes
+                    if (isStartupReadyForAds) {
                         val act = pendingActivity?.get()
                         if (act != null) {
                             withContext(Dispatchers.Main) {
-                                initUnityLevelPlay(act, unityAppKey)
+                                initializeConfiguredAdSdks(act)
                             }
-                            pendingActivity = null
                         }
                     }
                 }

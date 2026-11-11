@@ -45,6 +45,7 @@ object SessionTracker {
         val activeSessionId = sessionId
         
         sessionJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(1_800L) // Defer auth disk/session check until after initial Splash frames
             var user = SupabaseClient.main.auth.currentUserOrNull()
             var retries = 0
             while (user == null && retries < 15) {

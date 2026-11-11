@@ -16,6 +16,7 @@ import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -91,7 +92,11 @@ class HomeViewModel : ViewModel() {
     }
 
     init {
-        loadHome()
+        viewModelScope.launch {
+            // Yield brief frame window so SplashScreen renders Frame 1 instantly without Ktor/Supabase init contention
+            delay(180L)
+            loadHome()
+        }
     }
 
     fun loadHome(isRefresh: Boolean = false) {

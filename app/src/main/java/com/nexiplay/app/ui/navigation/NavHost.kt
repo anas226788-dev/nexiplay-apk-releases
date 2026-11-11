@@ -69,6 +69,9 @@ import com.nexiplay.app.ui.screens.splash.SplashScreen
 import com.nexiplay.app.ui.screens.vibecheck.VibeCheckScreen
 import com.nexiplay.app.ui.screens.watchlist.WatchlistScreen
 import com.nexiplay.app.ui.theme.*
+import com.nexiplay.app.util.findActivity
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.delay
 
 /**
  * Matches `src/components/MobileBottomNav.tsx` from nexiplay-web-main 1:1
@@ -96,11 +99,25 @@ fun NexiPlayNavHost(
     val appUpdateInfo by com.nexiplay.app.data.util.AppUpdateManager.updateInfo.collectAsState()
     var updateDismissed by remember { mutableStateOf(false) }
     var showUpsellPopup by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
-        com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate()
         com.nexiplay.app.data.util.AdManager.onShowUpsellPopup = { _, _, _, _ ->
             showUpsellPopup = true
+        }
+    }
+
+    // Run non-essential startup tasks ONLY after leaving SplashScreen so launch frames stay 100% lag-free
+    var postSplashInitialized by remember { mutableStateOf(false) }
+    LaunchedEffect(currentRoute) {
+        if (!postSplashInitialized && currentRoute != null && currentRoute != Screen.Splash.route) {
+            postSplashInitialized = true
+            globalNoticeViewModel.ensureLoaded()
+            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate()
+            delay(450L)
+            context.findActivity()?.let { act ->
+                com.nexiplay.app.data.util.AdManager.markStartupReadyForAds(act)
+            }
         }
     }
 

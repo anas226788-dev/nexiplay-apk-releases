@@ -108,9 +108,11 @@ object EpisodeUpdatesNotificationManager {
      */
     fun startLiveWatcher(context: Context) {
         val appContext = context.applicationContext
-        initChannel(appContext)
         if (watcherJob?.isActive == true) return
         watcherJob = scope.launch {
+            initChannel(appContext)
+            // Delay initial background sync so app startup & Splash Screen stay 100% smooth
+            delay(8_000L)
             while (isActive) {
                 syncAllNotificationsInternal(appContext)
                 delay(90_000L) // Check every 90 seconds for live updates
