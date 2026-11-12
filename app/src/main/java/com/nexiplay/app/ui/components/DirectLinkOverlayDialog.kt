@@ -77,11 +77,14 @@ fun DirectLinkOverlayDialog() {
 
     var remainingSeconds by remember(current.id) { mutableIntStateOf(current.durationSeconds.coerceAtLeast(1)) }
     var isForeground by remember(current.id) { mutableStateOf(true) }
-    var pageProgress by remember(current.id) { mutableIntStateOf(15) }
+    var pageProgress by remember(current.id) { mutableIntStateOf(0) }
+    var isLoadingPage by remember(current.id) { mutableStateOf(true) }
+    var loadEpoch by remember(current.id) { mutableIntStateOf(0) }
+    var isPageLoaded by remember(current.id) { mutableStateOf(false) }
     var webViewRef by remember(current.id) { mutableStateOf<WebView?>(null) }
 
     val totalSeconds = current.durationSeconds.coerceAtLeast(1)
-    val isReady = remainingSeconds <= 0
+    val isReady = isPageLoaded && remainingSeconds <= 0
 
     // Pause timer if the user leaves or minimizes the app so verification stays genuine
     DisposableEffect(lifecycleOwner, current.id) {
@@ -98,7 +101,36 @@ fun DirectLinkOverlayDialog() {
         }
     }
 
+    // Unlock the countdown only AFTER the Direct Link page + redirect chain has loaded
+    LaunchedEffect(current.id, loadEpoch, isLoadingPage, pageProgress) {
+        if (isPageLoaded) return@LaunchedEffect
+        if (loadEpoch > 0 && (!isLoadingPage || pageProgress >= 95)) {
+            delay(850L) // allow immediate Adsterra JS/HTTP redirect hops to start before locking in loaded state
+            if (!isLoadingPage || pageProgress >= 95) {
+                isPageLoaded = true
+            }
+        }
+    }
+
+    // Safety fallback cap (15s foreground wait max) so a stalled third-party analytics script never locks users forever
     LaunchedEffect(current.id, isForeground) {
+        var foregroundWaitMs = 0L
+        while (!isPageLoaded && foregroundWaitMs < 15_000L) {
+            if (isForeground) {
+                delay(250L)
+                foregroundWaitMs += 250L
+            } else {
+                delay(250L)
+            }
+        }
+        if (!isPageLoaded && foregroundWaitMs >= 15_000L) {
+            isPageLoaded = true
+        }
+    }
+
+    // Countdown runs strictly AFTER the page has loaded and only while app is in foreground
+    LaunchedEffect(current.id, isPageLoaded, isForeground) {
+        if (!isPageLoaded) return@LaunchedEffect
         while (remainingSeconds > 0) {
             if (isForeground) {
                 delay(1000L)
@@ -112,7 +144,11 @@ fun DirectLinkOverlayDialog() {
     }
 
     val animatedTimerProgress by animateFloatAsState(
-        targetValue = ((totalSeconds - remainingSeconds).toFloat() / totalSeconds.toFloat()).coerceIn(0f, 1f),
+        targetValue = if (!isPageLoaded) {
+            0f
+        } else {
+            ((totalSeconds - remainingSeconds).toFloat() / totalSeconds.toFloat()).coerceIn(0f, 1f)
+        },
         label = "directLinkTimerProgress"
     )
 
@@ -166,11 +202,19 @@ fun DirectLinkOverlayDialog() {
                         Icon(
                             imageVector = if (isReady) Icons.Rounded.CheckCircle else Icons.Rounded.Timer,
                             contentDescription = null,
-                            tint = if (isReady) Color(0xFF34D399) else Color(0xFFC4B5FD),
+                            tint = when {
+                                isReady -> Color(0xFF34D399)
+                                !isPageLoaded -> Color(0xFFFBBF24)
+                                else -> Color(0xFFC4B5FD)
+                            },
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = if (isReady) "0s" else "${remainingSeconds}s",
+                            text = when {
+                                isReady -> "0s"
+                                !isPageLoaded -> "Wait..."
+                                else -> "${remainingSeconds}s"
+                            },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = if (isReady) Color(0xFF34D399) else Color.White
@@ -188,10 +232,10 @@ fun DirectLinkOverlayDialog() {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (isReady) {
-                                "Verified! Tap ${current.actionLabel} below"
-                            } else {
-                                "Please wait ${remainingSeconds}s to continue"
+                            text = when {
+                                isReady -> "Verified! Tap ${current.actionLabel} below"
+                                !isPageLoaded -> "Loading sponsor page... timer starts once loaded (${pageProgress}%)"
+                                else -> "Page loaded • Wait ${remainingSeconds}s to continue"
                             },
                             fontSize = 11.sp,
                             color = if (isReady) Color(0xFF34D399) else Color(0xFF9CA3AF),
@@ -321,10 +365,35 @@ fun DirectLinkOverlayDialog() {
                             webChromeClient = object : WebChromeClient() {
                                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                     pageProgress = newProgress
+                                    if (newProgress >= 100 && loadEpoch > 0) {
+                                        isLoadingPage = false
+                                    }
                                 }
                             }
 
                             webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(
+                                    view: WebView?,
+                                    url: String?,
+                                    favicon: android.graphics.Bitmap?
+                                ) {
+                                    super.onPageStarted(view, url, favicon)
+                                    if (!url.isNullOrBlank() && url != "about:blank") {
+                                        isLoadingPage = true
+                                        loadEpoch++
+                                    }
+                                }
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    if (!url.isNullOrBlank() && url != "about:blank") {
+                                        isLoadingPage = false
+                                        if (pageProgress < 100) {
+                                            pageProgress = 100
+                                        }
+                                    }
+                                }
+
                                 override fun shouldOverrideUrlLoading(
                                     view: WebView?,
                                     request: WebResourceRequest?
@@ -333,6 +402,7 @@ fun DirectLinkOverlayDialog() {
                                     if (nextUrl.startsWith("http://", ignoreCase = true) ||
                                         nextUrl.startsWith("https://", ignoreCase = true)
                                     ) {
+                                        isLoadingPage = true
                                         return false // keep inside overlay WebView
                                     }
                                     return try {

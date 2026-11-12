@@ -546,9 +546,7 @@ fun ProfileScreen(navController: NavController) {
                                         try {
                                             com.onesignal.OneSignal.logout()
                                         } catch (_: Exception) {}
-                                        com.nexiplay.app.data.util.AdManager.userBadgeType = ""
-                                        com.nexiplay.app.data.util.AdManager.badgeExpiresAt = null
-                                        com.nexiplay.app.data.util.AdManager.setAdFreeExpiry(context, null)
+                                        com.nexiplay.app.data.util.AdManager.clearUserPerks(context)
                                         navController.navigate(Screen.Home.route) {
                                             popUpTo(0) { inclusive = true }
                                         }

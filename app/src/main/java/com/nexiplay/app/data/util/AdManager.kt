@@ -329,6 +329,20 @@ object AdManager {
 
         isUserAdFree = activeAdFree
         refreshPremiumState()
+        if (!isUserPremium() && isConfigLoaded && isStartupReadyForAds && startioAppId.isNotEmpty()) {
+            preloadStartIoInterstitial(context.applicationContext)
+        }
+    }
+
+    fun clearUserPerks(context: Context) {
+        userBadgeType = ""
+        badgeExpiresAt = null
+        doubleBoostUntil = null
+        setAdFreeExpiry(context, null)
+        if (isConfigLoaded && startioAppId.isNotEmpty()) {
+            initStartIo(context.applicationContext, startioAppId)
+            preloadStartIoInterstitial(context.applicationContext, force = true)
+        }
     }
 
     fun syncProfilePerks(
@@ -694,7 +708,7 @@ object AdManager {
 
     /**
      * Frequency-capped Adsterra Direct Link overlay when user taps "Watch Now" or Episode "Watch".
-     * Shows a 5s live countdown overlay inside the app before opening the player.
+     * Waits until the sponsor page loads, then runs a 12s countdown before opening the player.
      */
     fun runWithStreamAdGate(context: Context, onProceedToWatch: () -> Unit) {
         if (isUserPremium()) {
@@ -721,7 +735,7 @@ object AdManager {
         showDirectLinkOverlay(
             url = streamUrl,
             title = "Preparing Stream",
-            durationSeconds = 5,
+            durationSeconds = 12,
             actionLabel = "Watch Now",
             onCompleted = {
                 val ts = System.currentTimeMillis()
@@ -736,7 +750,7 @@ object AdManager {
 
     /**
      * Frequency-capped Adsterra Direct Link overlay before starting a movie/episode download.
-     * Shows a 6s live countdown overlay inside the app, then starts the download.
+     * Waits until the sponsor page loads, then runs a 15s countdown before starting the download.
      */
     fun runWithDownloadAdGate(context: Context, onUnlocked: () -> Unit) {
         if (isUserPremium()) {
@@ -762,7 +776,7 @@ object AdManager {
         showDirectLinkOverlay(
             url = directUrl,
             title = "Unlocking Fast Download",
-            durationSeconds = 6,
+            durationSeconds = 15,
             actionLabel = "Download Now",
             onCompleted = {
                 val ts = System.currentTimeMillis()
@@ -776,8 +790,8 @@ object AdManager {
     }
 
     /**
-     * Intentional Coin Center bonus explorer task (10s overlay countdown + 10m cooldown).
-     * Rewards strictly when the full 10s timer finishes.
+     * Intentional Coin Center bonus explorer task (waits for page load + 15s overlay countdown + 10m cooldown).
+     * Rewards strictly when the full post-load 15s timer finishes.
      */
     fun triggerDirectLinkCoinTask(
         context: Context,
@@ -802,7 +816,7 @@ object AdManager {
         showDirectLinkOverlay(
             url = url,
             title = "Bonus Coin Verification",
-            durationSeconds = 10,
+            durationSeconds = 15,
             actionLabel = "Claim Coins",
             onCompleted = {
                 val ts = System.currentTimeMillis()
@@ -813,7 +827,7 @@ object AdManager {
                 onRewarded()
             },
             onCancelled = {
-                onUnavailableOrCooldown("Please stay for the full 10s timer to claim coins.")
+                onUnavailableOrCooldown("Please stay for the full 15s timer after the page loads to claim coins.")
             }
         )
     }
@@ -905,10 +919,10 @@ object AdManager {
             showDirectLinkOverlay(
                 url = fallbackUrl,
                 title = "Reward Verification",
-                durationSeconds = 10,
+                durationSeconds = 15,
                 actionLabel = "Claim Reward",
                 onCompleted = { onRewarded() },
-                onCancelled = { onFailed("Please complete the 10s ad timer to earn the reward.") }
+                onCancelled = { onFailed("Please complete the 15s ad timer after the page loads to earn the reward.") }
             )
         } else {
             mainHandler.post { onFailed(previousError) }
@@ -1396,8 +1410,10 @@ object AdManager {
         initStartIo(context.applicationContext, startioAppId)
 
         val density = context.resources.displayMetrics.density
-        val minHeightPx = ((if (isMrec) 250 else 50) * density).toInt()
-        val widthPx = ((if (isMrec) 300 else 320) * density).toInt()
+        val widthDp = if (isMrec) 300 else 320
+        val heightDp = if (isMrec) 250 else 50
+        val minHeightPx = (heightDp * density).toInt()
+        val widthPx = (widthDp * density).toInt()
 
         val container = FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -1410,13 +1426,16 @@ object AdManager {
 
         val listener = object : BannerListener {
             override fun onReceiveAd(bannerView: View?) {
+                android.util.Log.d("AdManager", "✅ Start.io ${if (isMrec) "MREC" else "Banner"} loaded")
                 mainHandler.post {
                     container.visibility = View.VISIBLE
                     bannerView?.visibility = View.VISIBLE
+                    (bannerView as? com.startapp.sdk.ads.banner.bannerstandard.BannerStandard)?.showBanner()
                     container.requestLayout()
                 }
             }
             override fun onFailedToReceiveAd(bannerView: View?) {
+                android.util.Log.w("AdManager", "⚠️ Start.io ${if (isMrec) "MREC" else "Banner"} failed: ${(bannerView as? com.startapp.sdk.ads.banner.BannerBase)?.errorMessage}")
                 mainHandler.post {
                     container.visibility = View.GONE
                 }
@@ -1428,6 +1447,9 @@ object AdManager {
         val banner = (if (isMrec) Mrec(context) else Banner(context)).apply {
             setBannerListener(listener)
         }
+        // CRITICAL: Call loadAd(widthDp, heightDp) BEFORE addView(), because Start.io BannerBase.loadAd()
+        // aborts silently if view.getParent() != null.
+        banner.loadAd(widthDp, heightDp)
         container.addView(
             banner,
             FrameLayout.LayoutParams(
@@ -1436,7 +1458,6 @@ object AdManager {
                 Gravity.CENTER_HORIZONTAL
             )
         )
-        banner.loadAd()
         return container
     }
 
