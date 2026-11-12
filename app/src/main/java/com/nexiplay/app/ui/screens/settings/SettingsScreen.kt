@@ -47,6 +47,7 @@ fun SettingsScreen(navController: NavController) {
     var storageUriStr by remember { mutableStateOf(settings.sdCardUri) }
 
     val appUpdateInfo by com.nexiplay.app.data.util.AppUpdateManager.updateInfo.collectAsState()
+    val isUpdateReady by com.nexiplay.app.data.util.AppUpdateManager.isUpdateReadyToInstall.collectAsState()
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var showManualUpdateDialog by remember { mutableStateOf(false) }
 
@@ -231,11 +232,18 @@ fun SettingsScreen(navController: NavController) {
             ) {
                 SettingsRow("App", "NexiPlay")
                 SettingsRow("Version", "${com.nexiplay.app.BuildConfig.VERSION_NAME} (${com.nexiplay.app.BuildConfig.VERSION_CODE})")
-                SettingsClickableRow(if (isCheckingUpdate) "Checking for updates..." else "Check for Updates") {
+                SettingsClickableRow(
+                    when {
+                        isCheckingUpdate -> "Checking for updates..."
+                        isUpdateReady && com.nexiplay.app.data.util.AppUpdateManager.isUpdateAvailable && appUpdateInfo != null ->
+                            "Update Ready (v${appUpdateInfo!!.latestVersionName}) • Tap to Install"
+                        else -> "Check for Updates"
+                    }
+                ) {
                     if (!isCheckingUpdate) {
                         isCheckingUpdate = true
                         scope.launch {
-                            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate()
+                            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate(context)
                             isCheckingUpdate = false
                             if (com.nexiplay.app.data.util.AppUpdateManager.isUpdateAvailable) {
                                 showManualUpdateDialog = true

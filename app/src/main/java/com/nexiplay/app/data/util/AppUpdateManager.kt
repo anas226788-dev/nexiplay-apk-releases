@@ -8,16 +8,20 @@ import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import com.nexiplay.app.BuildConfig
 import com.nexiplay.app.data.SupabaseClient
 import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.io.File
+import java.io.FileInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -33,15 +37,8 @@ data class AppUpdateInfo(
 )
 
 /**
- * Industry-grade in-app update manager.
- *
- * Handles:
- * - Fetching update info from Supabase (`app_config` table)
- * - Version comparison with proper code-based logic
- * - APK download with progress tracking & redirect handling
- * - Runtime install permission checks (Android 8+)
- * - Error recovery with retry support
- * - Dismissed-version persistence
+ * In-app OTA manager supporting silent background APK prefetching for minor updates
+ * and instant 1-tap installation when ready or when a major/force update is triggered.
  */
 object AppUpdateManager {
 
@@ -54,6 +51,9 @@ object AppUpdateManager {
 
     private val _isDownloading = MutableStateFlow(false)
     val isDownloading = _isDownloading.asStateFlow()
+
+    private val _isUpdateReadyToInstall = MutableStateFlow(false)
+    val isUpdateReadyToInstall = _isUpdateReadyToInstall.asStateFlow()
 
     enum class UpdateState { IDLE, CONNECTING, DOWNLOADING, INSTALLING, ERROR, COMPLETE }
     private val _updateState = MutableStateFlow(UpdateState.IDLE)
@@ -71,10 +71,16 @@ object AppUpdateManager {
     // ── Constants ──
     private const val PREFS_NAME = "app_update_prefs"
     private const val KEY_DISMISSED_VERSION_CODE = "dismissed_version_code"
+    private const val UPDATES_SUBDIR = "apk_updates"
     private const val CONNECT_TIMEOUT = 20_000
     private const val READ_TIMEOUT = 60_000
     private const val MAX_REDIRECTS = 5
     private const val BUFFER_SIZE = 8192
+
+    private val downloadMutex = Mutex()
+
+    @Volatile
+    private var interactiveDownloadRequested = false
 
     // ── Computed Properties ──
 
@@ -87,14 +93,18 @@ object AppUpdateManager {
     val isForceUpdate: Boolean
         get() {
             val info = _updateInfo.value ?: return false
-            // Force update if explicitly set OR if current version is below minimum
+            // Major / force update if explicitly flagged OR installed build is below minimum supported code
             return info.forceUpdate || BuildConfig.VERSION_CODE < info.minVersionCode
         }
 
     /**
-     * Check if the update dialog should be shown.
-     * Force updates always show. Optional updates respect dismissed version.
+     * Only major/force updates auto-prompt the user with an install popup.
+     * Minor updates download silently in the background without interrupting playback or browsing.
      */
+    fun shouldAutoPromptUpdate(): Boolean {
+        return isUpdateAvailable && isForceUpdate
+    }
+
     fun shouldShowUpdate(context: Context): Boolean {
         val info = _updateInfo.value ?: return false
         if (!isUpdateAvailable) return false
@@ -105,9 +115,6 @@ object AppUpdateManager {
         return info.latestVersionCode > dismissedVersionCode
     }
 
-    /**
-     * Mark the current update version as dismissed.
-     */
     fun dismissUpdatePermanently(context: Context) {
         val info = _updateInfo.value ?: return
         if (isForceUpdate) return
@@ -116,13 +123,85 @@ object AppUpdateManager {
         prefs.edit().putInt(KEY_DISMISSED_VERSION_CODE, info.latestVersionCode).apply()
     }
 
+    // ── Cache / Verification Helpers ──
+
+    private fun getUpdatesDir(context: Context): File {
+        val dir = File(context.applicationContext.filesDir, UPDATES_SUBDIR)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun apkFileForVersion(context: Context, versionCode: Int): File {
+        return File(getUpdatesDir(context), "nexiplay-v$versionCode.apk")
+    }
+
+    private fun isValidApkArchive(context: Context, file: File, expectedMinVersionCode: Int): Boolean {
+        if (!file.exists() || file.length() < 64 * 1024L) return false
+
+        // Verify ZIP/APK header ('P', 'K')
+        val hasPkHeader = runCatching {
+            FileInputStream(file).use { fis ->
+                val header = ByteArray(2)
+                fis.read(header) == 2 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+            }
+        }.getOrDefault(false)
+        if (!hasPkHeader) return false
+
+        // Verify package identity & version code matches NexiPlay
+        return runCatching {
+            val pm = context.applicationContext.packageManager
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(file.absolutePath, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(file.absolutePath, 0)
+            } ?: return@runCatching false
+
+            val archiveVersion = PackageInfoCompat.getLongVersionCode(pkgInfo)
+            pkgInfo.packageName == context.packageName && archiveVersion >= expectedMinVersionCode.toLong()
+        }.getOrDefault(false)
+    }
+
+    fun getVerifiedCachedApk(context: Context, info: AppUpdateInfo? = _updateInfo.value): File? {
+        if (info == null || info.latestVersionCode <= BuildConfig.VERSION_CODE) {
+            _isUpdateReadyToInstall.value = false
+            return null
+        }
+        val candidate = apkFileForVersion(context, info.latestVersionCode)
+        val valid = isValidApkArchive(context, candidate, info.latestVersionCode)
+        _isUpdateReadyToInstall.value = valid
+        if (valid && _totalBytes.value <= 0L) {
+            _totalBytes.value = candidate.length()
+        }
+        return if (valid) candidate else null
+    }
+
+    fun cleanupStaleApks(context: Context, keepVersionCode: Int? = null) {
+        val dirs = listOf(
+            File(context.applicationContext.filesDir, UPDATES_SUBDIR),
+            File(context.applicationContext.cacheDir, UPDATES_SUBDIR),
+        )
+        val keepName = keepVersionCode?.takeIf { it > BuildConfig.VERSION_CODE }?.let { "nexiplay-v$it.apk" }
+        dirs.forEach { dir ->
+            if (!dir.exists()) return@forEach
+            dir.listFiles()?.forEach { file ->
+                if (keepName != null && file.name == keepName && isValidApkArchive(context, file, keepVersionCode)) {
+                    return@forEach
+                }
+                if (!downloadMutex.isLocked || !file.name.endsWith(".tmp")) {
+                    runCatching { file.delete() }
+                }
+            }
+        }
+    }
+
     // ── Check for Update ──
 
     /**
-     * Fetch latest update info from Supabase.
-     * Reads from `app_config` table with id = 'app_update'.
+     * Fetch latest update info from Supabase (`app_config` table with id = 'app_update').
+     * Also verifies whether the target APK is already silently cached on disk.
      */
-    suspend fun checkForUpdate() {
+    suspend fun checkForUpdate(context: Context? = null) {
         withContext(Dispatchers.IO) {
             try {
                 val info = SupabaseClient.main.from("app_config")
@@ -132,25 +211,51 @@ object AppUpdateManager {
                     .decodeSingleOrNull<AppUpdateInfo>()
 
                 _updateInfo.value = info
+                if (context != null) {
+                    val activeTarget = info?.latestVersionCode?.takeIf { it > BuildConfig.VERSION_CODE }
+                    cleanupStaleApks(context, activeTarget)
+                    getVerifiedCachedApk(context, info)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _updateInfo.value = null
+                _isUpdateReadyToInstall.value = false
             }
         }
     }
 
-    // ── Download & Install ──
+    // ── Silent Background Prefetch & Interactive Install ──
 
     /**
-     * Download APK with full redirect chain handling and install.
-     *
-     * Handles:
-     * - HTTP 301/302/303/307/308 redirects (up to MAX_REDIRECTS)
-     * - Google Drive large-file confirmation pages
-     * - Progress tracking with byte counts
-     * - Error recovery with meaningful messages
+     * Silently downloads the update APK in background when internet is available,
+     * without showing dialogs or error popups. Once complete, the APK is verified
+     * and ready for instant 1-tap install without waiting.
+     */
+    suspend fun prefetchIfAvailable(context: Context): Boolean {
+        val appContext = context.applicationContext
+        if (_updateInfo.value == null) {
+            checkForUpdate(appContext)
+        }
+        val info = _updateInfo.value ?: return false
+        if (!isUpdateAvailable) {
+            cleanupStaleApks(appContext, null)
+            _isUpdateReadyToInstall.value = false
+            return false
+        }
+
+        if (getVerifiedCachedApk(appContext, info) != null) {
+            return true
+        }
+
+        return downloadApkToDisk(appContext, info, publishUiState = false) != null
+    }
+
+    /**
+     * Interactive update trigger (from Force Update popup or Settings -> Update Ready).
+     * If already silently downloaded in background, opens Android PackageInstaller immediately.
      */
     suspend fun downloadAndInstall(context: Context) {
+        val appContext = context.applicationContext
         val info = _updateInfo.value ?: return
         if (info.apkUrl.isBlank()) {
             _errorMessage.value = "No download URL configured"
@@ -158,27 +263,26 @@ object AppUpdateManager {
             return
         }
 
-        // Check install permission on Android 8+
+        // Check install permission on Android 8+ before launching installer
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!context.packageManager.canRequestPackageInstalls()) {
-                // Prompt user to enable install from unknown sources
+            if (!appContext.packageManager.canRequestPackageInstalls()) {
                 withContext(Dispatchers.Main) {
                     try {
                         val intent = Intent(
                             Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:${context.packageName}")
+                            Uri.parse("package:${appContext.packageName}")
                         ).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        context.startActivity(intent)
+                        appContext.startActivity(intent)
                         Toast.makeText(
-                            context,
-                            "Please allow app installation, then try again",
+                            appContext,
+                            "Please allow app installation, then tap Install again",
                             Toast.LENGTH_LONG
                         ).show()
                     } catch (e: Exception) {
                         Toast.makeText(
-                            context,
+                            appContext,
                             "Please enable 'Install unknown apps' in Settings",
                             Toast.LENGTH_LONG
                         ).show()
@@ -188,32 +292,69 @@ object AppUpdateManager {
             }
         }
 
-        _isDownloading.value = true
-        _downloadProgress.value = 0f
-        _errorMessage.value = null
-        _updateState.value = UpdateState.CONNECTING
-        _downloadedBytes.value = 0L
-        _totalBytes.value = 0L
+        interactiveDownloadRequested = true
+        try {
+            val cached = withContext(Dispatchers.IO) { getVerifiedCachedApk(appContext, info) }
+            val apkFile = if (cached != null) {
+                _downloadProgress.value = 1f
+                _updateState.value = UpdateState.INSTALLING
+                cached
+            } else {
+                downloadApkToDisk(appContext, info, publishUiState = true)
+            } ?: return
 
-        withContext(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                installApk(appContext, apkFile)
+                _updateState.value = UpdateState.COMPLETE
+            }
+        } finally {
+            interactiveDownloadRequested = false
+        }
+    }
+
+    private suspend fun downloadApkToDisk(
+        context: Context,
+        info: AppUpdateInfo,
+        publishUiState: Boolean,
+    ): File? = withContext(Dispatchers.IO) {
+        downloadMutex.withLock {
+            val shouldExposeUi = publishUiState || interactiveDownloadRequested
+
+            // Re-check inside lock in case background prefetch just finished
+            getVerifiedCachedApk(context, info)?.let { existing ->
+                if (shouldExposeUi) {
+                    _downloadProgress.value = 1f
+                    _totalBytes.value = existing.length()
+                    _downloadedBytes.value = existing.length()
+                }
+                return@withLock existing
+            }
+
+            if (shouldExposeUi) {
+                _isDownloading.value = true
+                _downloadProgress.value = 0f
+                _errorMessage.value = null
+                _updateState.value = UpdateState.CONNECTING
+                _downloadedBytes.value = 0L
+                _totalBytes.value = 0L
+            }
+
+            val dir = getUpdatesDir(context)
+            val tmpFile = File(dir, "nexiplay-v${info.latestVersionCode}.apk.tmp")
+            val finalFile = apkFileForVersion(context, info.latestVersionCode)
+            var connection: HttpURLConnection? = null
+
             try {
-                val cacheDir = File(context.cacheDir, "apk_updates")
-                if (!cacheDir.exists()) cacheDir.mkdirs()
+                if (tmpFile.exists()) tmpFile.delete()
 
-                // Clean old APKs
-                cacheDir.listFiles()?.forEach { it.delete() }
-
-                val apkFile = File(cacheDir, "nexiplay-${info.latestVersionName}.apk")
-
-                // Resolve final download URL (handle redirects + Google Drive confirmation)
                 val finalUrl = resolveDownloadUrl(info.apkUrl)
-
                 val url = URL(finalUrl)
-                val connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = CONNECT_TIMEOUT
-                connection.readTimeout = READ_TIMEOUT
-                connection.instanceFollowRedirects = true
-                connection.setRequestProperty("User-Agent", "NexiPlay/${BuildConfig.VERSION_NAME}")
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = CONNECT_TIMEOUT
+                    readTimeout = READ_TIMEOUT
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "NexiPlay/${BuildConfig.VERSION_NAME}")
+                }
                 connection.connect()
 
                 val responseCode = connection.responseCode
@@ -222,70 +363,102 @@ object AppUpdateManager {
                 }
 
                 val contentType = connection.contentType ?: ""
-                // Verify we're not downloading an HTML page instead of an APK
                 if (contentType.contains("text/html", ignoreCase = true)) {
-                    connection.disconnect()
                     throw Exception("Download URL returned HTML instead of APK. Please use a direct download link.")
                 }
 
                 val totalSize = connection.contentLength.toLong()
-                _totalBytes.value = totalSize
                 var downloadedSize = 0L
 
-                _updateState.value = UpdateState.DOWNLOADING
+                if (shouldExposeUi || interactiveDownloadRequested) {
+                    _totalBytes.value = totalSize
+                    _updateState.value = UpdateState.DOWNLOADING
+                }
 
                 connection.inputStream.use { input ->
-                    apkFile.outputStream().use { output ->
+                    tmpFile.outputStream().use { output ->
                         val buffer = ByteArray(BUFFER_SIZE)
                         var bytesRead: Int
                         while (input.read(buffer).also { bytesRead = it } != -1) {
                             output.write(buffer, 0, bytesRead)
                             downloadedSize += bytesRead
-                            _downloadedBytes.value = downloadedSize
-                            if (totalSize > 0) {
-                                _downloadProgress.value = downloadedSize.toFloat() / totalSize.toFloat()
+                            if (publishUiState || interactiveDownloadRequested) {
+                                _isDownloading.value = true
+                                _downloadedBytes.value = downloadedSize
+                                _totalBytes.value = totalSize
+                                if (_updateState.value != UpdateState.DOWNLOADING) {
+                                    _updateState.value = UpdateState.DOWNLOADING
+                                }
+                                if (totalSize > 0) {
+                                    _downloadProgress.value = downloadedSize.toFloat() / totalSize.toFloat()
+                                }
                             }
                         }
                     }
                 }
 
-                connection.disconnect()
-
-                // Verify downloaded file
-                if (!apkFile.exists() || apkFile.length() < 1024) {
+                if (totalSize > 0 && downloadedSize != totalSize) {
                     throw Exception("Download incomplete or file corrupted")
                 }
-
-                _downloadProgress.value = 1f
-                _updateState.value = UpdateState.INSTALLING
-
-                // Trigger install on Main thread
-                withContext(Dispatchers.Main) {
-                    installApk(context, apkFile)
-                    _updateState.value = UpdateState.COMPLETE
+                if (!isValidApkArchive(context, tmpFile, info.latestVersionCode)) {
+                    throw Exception("Downloaded package failed verification or is corrupted")
                 }
 
+                // Remove old APK versions only after the new APK has passed verification
+                dir.listFiles()?.forEach { file ->
+                    if (file.name != tmpFile.name && file.name != finalFile.name) {
+                        runCatching { file.delete() }
+                    }
+                }
+                if (finalFile.exists()) finalFile.delete()
+                if (!tmpFile.renameTo(finalFile)) {
+                    tmpFile.copyTo(finalFile, overwrite = true)
+                    tmpFile.delete()
+                }
+
+                _isUpdateReadyToInstall.value = true
+                _totalBytes.value = finalFile.length()
+
+                if (publishUiState || interactiveDownloadRequested) {
+                    _downloadProgress.value = 1f
+                    _updateState.value = UpdateState.INSTALLING
+                }
+
+                finalFile
             } catch (e: Exception) {
                 e.printStackTrace()
-                val userMessage = when {
-                    e.message?.contains("timeout", ignoreCase = true) == true ->
-                        "Connection timed out. Please check your internet and try again."
-                    e.message?.contains("HTML", ignoreCase = true) == true ->
-                        "The update link is unavailable. Please try again later."
-                    e.message?.contains("HTTP", ignoreCase = true) == true ->
-                        "The update server couldn't be reached. Please try again later."
-                    e.message?.contains("Unable to resolve host", ignoreCase = true) == true ->
-                        "No internet connection. Please check your network."
-                    e.message?.contains("corrupted", ignoreCase = true) == true ->
-                        "Download was incomplete. Please try again."
-                    else ->
-                        "Update download failed. Check your connection and available storage, then try again."
+                runCatching { if (tmpFile.exists()) tmpFile.delete() }
+                _isUpdateReadyToInstall.value = false
+
+                if (publishUiState || interactiveDownloadRequested) {
+                    val userMessage = when {
+                        e.message?.contains("timeout", ignoreCase = true) == true ->
+                            "Connection timed out. Please check your internet and try again."
+                        e.message?.contains("HTML", ignoreCase = true) == true ->
+                            "The update link is unavailable. Please try again later."
+                        e.message?.contains("HTTP", ignoreCase = true) == true ->
+                            "The update server couldn't be reached. Please try again later."
+                        e.message?.contains("Unable to resolve host", ignoreCase = true) == true ->
+                            "No internet connection. Please check your network."
+                        e.message?.contains("corrupted", ignoreCase = true) == true ->
+                            "Download was incomplete. Please try again."
+                        else ->
+                            "Update download failed. Check your connection and available storage, then try again."
+                    }
+                    _errorMessage.value = userMessage
+                    _downloadProgress.value = -1f
+                    _updateState.value = UpdateState.ERROR
+                } else {
+                    _downloadProgress.value = -1f
+                    _updateState.value = UpdateState.IDLE
+                    _errorMessage.value = null
                 }
-                _errorMessage.value = userMessage
-                _downloadProgress.value = -1f
-                _updateState.value = UpdateState.ERROR
+                null
             } finally {
-                _isDownloading.value = false
+                runCatching { connection?.disconnect() }
+                if (publishUiState || interactiveDownloadRequested) {
+                    _isDownloading.value = false
+                }
             }
         }
     }
@@ -298,7 +471,6 @@ object AppUpdateManager {
         var currentUrl = originalUrl
         var redirectCount = 0
 
-        // Handle Google Drive URLs — convert share links to direct download
         if (currentUrl.contains("drive.google.com") || currentUrl.contains("docs.google.com")) {
             val fileId = extractGDriveFileId(currentUrl)
             if (fileId != null) {
@@ -306,7 +478,6 @@ object AppUpdateManager {
             }
         }
 
-        // Follow redirects manually to handle confirmation pages
         while (redirectCount < MAX_REDIRECTS) {
             val url = URL(currentUrl)
             val conn = url.openConnection() as HttpURLConnection
@@ -328,11 +499,9 @@ object AppUpdateManager {
                 continue
             }
 
-            // Google Drive virus scan confirmation — check for download_warning cookie
             if (code == 200 && (currentUrl.contains("drive.google.com") || currentUrl.contains("docs.google.com"))) {
                 val contentType = conn.contentType ?: ""
                 if (contentType.contains("text/html")) {
-                    // Get the confirmation cookie
                     val cookies = conn.headerFields["Set-Cookie"]
                     val confirmCookie = cookies?.find { it.contains("download_warning") }
                     val confirmToken = confirmCookie
@@ -347,7 +516,6 @@ object AppUpdateManager {
                         redirectCount++
                         continue
                     }
-                    // Fallback: add &confirm=t
                     currentUrl = if (currentUrl.contains("confirm=")) currentUrl
                     else "$currentUrl&confirm=t"
                     redirectCount++
@@ -362,28 +530,19 @@ object AppUpdateManager {
         return currentUrl
     }
 
-    /**
-     * Extract Google Drive file ID from various URL formats.
-     */
     private fun extractGDriveFileId(url: String): String? {
-        // Format: https://drive.google.com/file/d/FILE_ID/view
         val pattern1 = Regex("/file/d/([a-zA-Z0-9_-]+)")
         pattern1.find(url)?.groupValues?.get(1)?.let { return it }
 
-        // Format: https://drive.google.com/uc?export=download&id=FILE_ID
         val pattern2 = Regex("[?&]id=([a-zA-Z0-9_-]+)")
         pattern2.find(url)?.groupValues?.get(1)?.let { return it }
 
-        // Format: https://drive.google.com/open?id=FILE_ID
         val pattern3 = Regex("open\\?id=([a-zA-Z0-9_-]+)")
         pattern3.find(url)?.groupValues?.get(1)?.let { return it }
 
         return null
     }
 
-    /**
-     * Launch Android PackageInstaller for the downloaded APK.
-     */
     private fun installApk(context: Context, apkFile: File) {
         try {
             val uri: Uri = FileProvider.getUriForFile(
@@ -408,9 +567,6 @@ object AppUpdateManager {
 
     // ── State Management ──
 
-    /**
-     * Reset all download/error state for retry or dismissal.
-     */
     fun resetState() {
         _downloadProgress.value = -1f
         _isDownloading.value = false
@@ -420,16 +576,10 @@ object AppUpdateManager {
         _totalBytes.value = 0L
     }
 
-    /**
-     * Legacy dismiss — just resets download progress.
-     */
     fun dismissUpdate() {
         resetState()
     }
 
-    /**
-     * Format bytes to human-readable string (e.g. "12.5 MB").
-     */
     fun formatBytes(bytes: Long): String {
         return when {
             bytes < 1024 -> "$bytes B"

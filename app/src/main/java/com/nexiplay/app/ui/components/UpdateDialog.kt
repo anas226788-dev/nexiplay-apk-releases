@@ -44,6 +44,7 @@ fun UpdateDialog(
 
     val downloadProgress by AppUpdateManager.downloadProgress.collectAsState()
     val isDownloading by AppUpdateManager.isDownloading.collectAsState()
+    val isUpdateReady by AppUpdateManager.isUpdateReadyToInstall.collectAsState()
     val updateState by AppUpdateManager.updateState.collectAsState()
     val errorMessage by AppUpdateManager.errorMessage.collectAsState()
     val downloadedBytes by AppUpdateManager.downloadedBytes.collectAsState()
@@ -153,6 +154,17 @@ fun UpdateDialog(
                             fontFamily = InterFont
                         )
                     }
+                }
+
+                if (isUpdateReady && !isWorking && !hasError) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Downloaded in background • Ready to install",
+                        fontSize = 12.sp,
+                        color = Color(0xFF4CAF50),
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = InterFont
+                    )
                 }
 
                 Spacer(Modifier.height(18.dp))
@@ -304,7 +316,11 @@ fun UpdateDialog(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (hasError) "Retry Download" else "Update Now",
+                            text = when {
+                                hasError -> "Retry Download"
+                                isUpdateReady -> "Install Now"
+                                else -> "Update Now"
+                            },
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             color = Color.White,

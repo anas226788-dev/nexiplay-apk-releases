@@ -30,6 +30,7 @@ class NotificationSyncWorker(
         return try {
             EpisodeUpdatesNotificationManager.initChannel(applicationContext)
             val ok = EpisodeUpdatesNotificationManager.syncOnceInBackground(applicationContext)
+            runCatching { AppUpdateManager.prefetchIfAvailable(applicationContext) }
             if (ok || runAttemptCount >= 2) Result.success() else Result.retry()
         } catch (t: Throwable) {
             t.printStackTrace()

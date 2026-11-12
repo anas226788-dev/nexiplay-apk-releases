@@ -97,7 +97,6 @@ fun NexiPlayNavHost(
     val activeBrowseTab by BrowseViewModel.activeTabFlow.collectAsState()
 
     val appUpdateInfo by com.nexiplay.app.data.util.AppUpdateManager.updateInfo.collectAsState()
-    var updateDismissed by remember { mutableStateOf(false) }
     var showUpsellPopup by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
@@ -113,7 +112,12 @@ fun NexiPlayNavHost(
         if (!postSplashInitialized && currentRoute != null && currentRoute != Screen.Splash.route) {
             postSplashInitialized = true
             globalNoticeViewModel.ensureLoaded()
-            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate()
+            com.nexiplay.app.data.util.AppUpdateManager.checkForUpdate(context)
+            if (com.nexiplay.app.data.util.AppUpdateManager.isUpdateAvailable &&
+                !com.nexiplay.app.data.util.AppUpdateManager.isUpdateReadyToInstall.value
+            ) {
+                com.nexiplay.app.data.util.AppUpdatePrefetchWorker.enqueue(context)
+            }
             delay(450L)
             context.findActivity()?.let { act ->
                 com.nexiplay.app.data.util.AdManager.markStartupReadyForAds(act)
@@ -199,11 +203,12 @@ fun NexiPlayNavHost(
         }
     }
 
-    if (appUpdateInfo != null && com.nexiplay.app.data.util.AppUpdateManager.isUpdateAvailable && (!updateDismissed || com.nexiplay.app.data.util.AppUpdateManager.isForceUpdate) && currentRoute != Screen.Splash.route) {
+    // Only major / force updates interrupt the user with an install popup.
+    // Minor updates download silently in the background via AppUpdatePrefetchWorker.
+    if (appUpdateInfo != null && com.nexiplay.app.data.util.AppUpdateManager.shouldAutoPromptUpdate() && currentRoute != Screen.Splash.route) {
         com.nexiplay.app.ui.components.UpdateDialog(
             updateInfo = appUpdateInfo!!,
             onDismiss = {
-                updateDismissed = true
                 com.nexiplay.app.data.util.AppUpdateManager.resetState()
             }
         )
