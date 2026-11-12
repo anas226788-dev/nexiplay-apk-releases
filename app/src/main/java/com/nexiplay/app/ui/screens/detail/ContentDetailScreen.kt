@@ -123,7 +123,7 @@ fun ContentDetailScreen(
             val fullKey = "${keyPrefix}_$quality"
             vaultLoadingKey = fullKey
             vaultErrors = vaultErrors - keyPrefix
-            Toast.makeText(context, "Generating $quality cloud download link...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Starting background download ($quality)...", Toast.LENGTH_SHORT).show()
 
             val fallbackUrls = buildList<String> {
                 val seasonObj = if (isTv) state.seasons.firstOrNull { it.seasonNumber == (sNum ?: 1) } else null
@@ -172,85 +172,76 @@ fun ContentDetailScreen(
                 }
             }.distinct()
 
+            val isAnimeContent = type.equals("anime", ignoreCase = true) ||
+                movie.type.equals("anime", ignoreCase = true) ||
+                state.categories.any {
+                    it.name.equals("Animation", ignoreCase = true) ||
+                        it.name.equals("Anime", ignoreCase = true)
+                }
+            val displayTitle = "${movie.title}${if (sNum != null && eNum != null) " S${sNum}E${eNum}" else ""} ($quality)"
+            val downloadRepo = com.nexiplay.app.data.repository.DownloadRepository(context)
+            val taskId = downloadRepo.enqueueVaultDownload(
+                displayTitle = displayTitle,
+                rawTitle = movie.title,
+                quality = quality,
+                isTv = isTv,
+                targetId = targetId,
+                season = sNum,
+                episode = eNum,
+                mediaType = if (isAnimeContent) "anime" else if (isTv) "tv" else "movie",
+                fallbackUrls = fallbackUrls,
+            )
+
+            // Observe service task while user stays on this screen; leaving screen/app never cancels DownloadService!
             scope.launch {
-                val isAnimeContent = type.equals("anime", ignoreCase = true) ||
-                    movie.type.equals("anime", ignoreCase = true) ||
-                    state.categories.any {
-                        it.name.equals("Animation", ignoreCase = true) ||
-                            it.name.equals("Anime", ignoreCase = true)
-                    }
-                val res = WebFeaturesRepository.resolveVaultDownload(
-                    isTv = isTv,
-                    targetId = targetId,
-                    season = sNum,
-                    episode = eNum,
-                    quality = quality,
-                    title = movie.title,
-                    mediaType = if (isAnimeContent) "anime" else if (isTv) "tv" else "movie",
-                    fallbackStreamUrls = fallbackUrls
-                )
-                vaultLoadingKey = null
-                if (res.success && (!res.directUrl.isNullOrBlank() || !res.url.isNullOrBlank())) {
-                    val resolvedQuality = res.quality ?: quality
-                    trackDownload(
-                        context = context,
-                        movie = movie,
-                        provider = "FastDirectVault",
-                        resolution = resolvedQuality,
-                        seasonNumber = sNum,
-                        episodeNumber = eNum
-                    )
-                    val directTarget = res.directUrl?.takeIf { it.isNotBlank() }
-                    val proxyOrDirectTarget = res.url?.takeIf { it.isNotBlank() } ?: directTarget
-                    val isCloudMirror = res.source.equals("toonplay", ignoreCase = true) ||
-                        directTarget?.let { u ->
-                            val l = u.lowercase()
-                            l.contains("hubcloud.") || l.contains("gdflix.") || l.contains("drive.google.") || l.contains("mega.") || l.contains("mediafire.") || l.contains("terabox.") || l.contains("1024terabox.") || l.contains("pcloud.") || l.contains("fpgo.") || l.contains("adhlinks.") || l.contains("animesalt.") || l.contains("razorshell.")
-                        } == true
-
-                    val safeFileName = (res.fileName?.takeIf { it.isNotBlank() }
-                        ?: "${movie.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}_${if (sNum != null && eNum != null) "S${sNum}E${eNum}_" else ""}${resolvedQuality}.${if (proxyOrDirectTarget?.contains(".mp4", true) == true && proxyOrDirectTarget.contains(".mkv", true) == false) "mp4" else "mkv"}")
-                    var enqueuedNatively = false
-
-                    if (isCloudMirror) {
-                        val cloudUrl = res.url ?: directTarget ?: proxyOrDirectTarget
-                        if (!cloudUrl.isNullOrBlank()) {
-                            openLink(cloudUrl, context, navController)
-                            Toast.makeText(context, "Opening cloud download mirror ($resolvedQuality)...", Toast.LENGTH_SHORT).show()
-                        }
-                    } else if (directTarget != null && proxyOrDirectTarget != null) {
-                        try {
-                            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
-                            if (dm != null) {
-                                // Use the Vercel proxy URL (res.url) so mobile ISPs that block *.workers.dev still download at full speed
-                                val request = android.app.DownloadManager.Request(Uri.parse(proxyOrDirectTarget)).apply {
-                                    addRequestHeader("Referer", when { proxyOrDirectTarget.contains("animeheaven.", true) -> "https://animeheaven.me/"; proxyOrDirectTarget.contains("hakunaymatata.", true) -> "https://netfilm.world/"; else -> "https://vidvault.to/" })
-                                    addRequestHeader(
-                                        "User-Agent",
-                                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                try {
+                    var handled = false
+                    downloadRepo.downloadsFlow.collect { list ->
+                        if (handled) return@collect
+                        val task = list.firstOrNull { it.id == taskId } ?: return@collect
+                        val st = task.statusEnum
+                        if (st != com.nexiplay.app.data.repository.DownloadStatus.RESOLVING) {
+                            handled = true
+                            vaultLoadingKey = null
+                            when {
+                                !task.cloudFallbackUrl.isNullOrBlank() -> {
+                                    val cloudUrl = task.cloudFallbackUrl!!
+                                    downloadRepo.removeDownload(task)
+                                    trackDownload(
+                                        context = context,
+                                        movie = movie,
+                                        provider = "FastDirectVault",
+                                        resolution = quality,
+                                        seasonNumber = sNum,
+                                        episodeNumber = eNum
                                     )
-                                    setTitle(safeFileName)
-                                    setDescription("Downloading ${movie.title} ($resolvedQuality)")
-                                    setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                    setAllowedOverMetered(true)
-                                    setAllowedOverRoaming(true)
-                                    setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safeFileName)
+                                    openLink(cloudUrl, context, navController)
+                                    Toast.makeText(context, "Opening cloud download mirror ($quality)...", Toast.LENGTH_SHORT).show()
                                 }
-                                val dlId = dm.enqueue(request); com.nexiplay.app.data.repository.DownloadRepository(context).saveDownloadRecord(dlId, "${movie.title}${if (sNum != null && eNum != null) " S${sNum}E${eNum}" else ""} ($resolvedQuality)", proxyOrDirectTarget)
-                                enqueuedNatively = true
-                                Toast.makeText(context, "Download started in notification bar ($resolvedQuality)!", Toast.LENGTH_LONG).show()
+                                st == com.nexiplay.app.data.repository.DownloadStatus.FAILED -> {
+                                    val err = task.errorMessage ?: "Cloud direct link unavailable for this title/episode."
+                                    vaultErrors = vaultErrors + (keyPrefix to err)
+                                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                }
+                                st == com.nexiplay.app.data.repository.DownloadStatus.QUEUED ||
+                                    st == com.nexiplay.app.data.repository.DownloadStatus.DOWNLOADING -> {
+                                    trackDownload(
+                                        context = context,
+                                        movie = movie,
+                                        provider = "FastDirectVault",
+                                        resolution = quality,
+                                        seasonNumber = sNum,
+                                        episodeNumber = eNum
+                                    )
+                                    Toast.makeText(context, "Download started in notification bar ($quality)!", Toast.LENGTH_LONG).show()
+                                }
+                                else -> Unit
                             }
-                        } catch (_: Exception) {
-                            enqueuedNatively = false
+                            throw kotlinx.coroutines.CancellationException("resolved")
                         }
                     }
-                    if (!isCloudMirror && !enqueuedNatively && !res.url.isNullOrBlank()) {
-                        openLink(res.url, context, navController)
-                    }
-                } else {
-                    val err = res.error ?: "Cloud direct link unavailable for this title/episode."
-                    vaultErrors = vaultErrors + (keyPrefix to err)
-                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                } catch (_: kotlinx.coroutines.CancellationException) {
+                    vaultLoadingKey = null
                 }
             }
         }

@@ -131,50 +131,42 @@ private const val ANTI_CLICKJACK_JS = """
 })();
 """
 
-// ── Helper: start download using system DownloadManager directly ──
+// ── Helper: start background-resilient download via NexiPlay DownloadService ──
 private fun startSystemDownload(context: Context, downloadUrl: String, fileName: String, title: String) {
     try {
-        // Prevent downloading garbage .bin files
-        var safeFileName = fileName
-        if (safeFileName.endsWith(".bin") || safeFileName.isBlank()) {
-            safeFileName = "video_${System.currentTimeMillis()}.mp4"
-        }
-
-        val settings = SettingsRepository(context)
-        if (settings.sdCardUri != null) {
-            // Use custom download service for SAF SD Card downloads
-            DownloadService.start(context, downloadUrl, safeFileName, title)
-            Toast.makeText(context, "Download started to SD Card: $title", Toast.LENGTH_SHORT).show()
-            
-            val repo = DownloadRepository(context)
-            repo.saveDownloadRecord(-1L, title, downloadUrl)
+        if (!downloadUrl.startsWith("http://", ignoreCase = true) &&
+            !downloadUrl.startsWith("https://", ignoreCase = true)
+        ) {
+            Toast.makeText(context, "Unsupported download scheme", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val cookie = CookieManager.getInstance().getCookie(downloadUrl)
+        val safeFileName = DownloadRepository.sanitizeFileName(fileName, downloadUrl)
+        val cookie = runCatching { CookieManager.getInstance().getCookie(downloadUrl) }.getOrNull().orEmpty()
         val refererHeader = when {
             downloadUrl.contains("workers.dev", ignoreCase = true) || downloadUrl.contains("vidvault", ignoreCase = true) -> "https://vidvault.to/"
             downloadUrl.contains("razorshell.space", ignoreCase = true) -> "https://argon.razorshell.space/"
+            downloadUrl.contains("animeheaven.", ignoreCase = true) -> "https://animeheaven.me/"
+            downloadUrl.contains("hakunaymatata.", ignoreCase = true) -> "https://netfilm.world/"
             else -> downloadUrl
         }
-        val request = DownloadManager.Request(Uri.parse(downloadUrl)).apply {
-            setTitle(title)
-            setDescription("Downloading via NexiPlay")
-            addRequestHeader("Cookie", cookie ?: "")
-            addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
-            addRequestHeader("Referer", refererHeader)
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "NexiPlay/$safeFileName")
-            setAllowedOverMetered(true)
-            setAllowedOverRoaming(true)
+        val headers = buildMap {
+            if (cookie.isNotBlank()) put("Cookie", cookie)
+            put("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+            put("Referer", refererHeader)
         }
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = dm.enqueue(request)
 
         val repo = DownloadRepository(context)
-        repo.saveDownloadRecord(downloadId, title, downloadUrl)
+        repo.enqueueDirectDownload(
+            url = downloadUrl,
+            fileName = safeFileName,
+            title = title.ifBlank { safeFileName },
+            headers = headers,
+        )
 
-        Toast.makeText(context, "⬇ Download started: $title", Toast.LENGTH_SHORT).show()
+        val settings = SettingsRepository(context)
+        val targetLabel = if (settings.sdCardUri != null) "SD Card" else "Downloads/NexiPlay"
+        Toast.makeText(context, "⬇ Background download started ($targetLabel): $title", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, com.nexiplay.app.ui.util.UserFacingError.from(e, "Download failed. Check your connection and available storage."), Toast.LENGTH_LONG).show()

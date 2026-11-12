@@ -100,6 +100,7 @@ object NotificationRouter {
             "novels" -> return Screen.Novels.route
             "coins" -> return Screen.Coins.route
             "profile" -> return Screen.Profile.route
+            "downloads" -> return "downloads"
             "notifications" -> return Screen.Notifications.route
             "live_tv", "livetv" -> return Screen.LiveTv.route
             "games", "arcade" -> return Screen.Games.route
@@ -109,12 +110,13 @@ object NotificationRouter {
         // 3. Parse URI path segments (supports nexiplay://content/anime/slug, nexiplay://anime/slug, https://.../anime/slug, etc.)
         val segments = uri?.pathSegments.orEmpty()
         val routeParts = when {
-            uri?.scheme == "nexiplay" && host in setOf("home", "browse", "novels", "coins", "profile", "notifications", "live_tv", "games", "vibe_check") -> {
+            uri?.scheme == "nexiplay" && host in setOf("home", "browse", "novels", "coins", "profile", "downloads", "notifications", "live_tv", "games", "vibe_check") -> {
                 return when (host) {
                     "browse" -> Screen.Browse.route
                     "novels" -> Screen.Novels.route
                     "coins" -> Screen.Coins.route
                     "profile" -> Screen.Profile.route
+                    "downloads" -> "downloads"
                     "notifications" -> Screen.Notifications.route
                     "live_tv" -> Screen.LiveTv.route
                     "games" -> Screen.Games.route
