@@ -1868,12 +1868,18 @@ fun WatchScreen(
                                             }
                                         )
                                     } else {
-                                        activateServer()
+                                        com.nexiplay.app.data.util.AdManager.showInterstitialWithCooldown(context) {
+                                            activateServer()
+                                        }
                                     }
                                 }
 
                                 val collapsedCount = 6
                                 val visibleServers = if (isServerSelectorExpanded) filteredServers else filteredServers.take(collapsedCount)
+
+                                com.nexiplay.app.ui.components.AppBannerAd(
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
 
                                 Column(
                                     modifier = Modifier
@@ -2268,7 +2274,9 @@ fun WatchScreen(
                                                                         )
                                                                         val matchedServer = currentServers.find { it.id == selectedServerId } ?: currentServers.firstOrNull()
                                                                         if (matchedServer != null) {
-                                                                            activateAndResolveServer(matchedServer, sNum, ep.episodeNumber)
+                                                                            com.nexiplay.app.data.util.AdManager.showInterstitialWithCooldown(context) {
+                                                                                activateAndResolveServer(matchedServer, sNum, ep.episodeNumber)
+                                                                            }
                                                                         }
                                                                     },
                                                                 contentAlignment = Alignment.Center

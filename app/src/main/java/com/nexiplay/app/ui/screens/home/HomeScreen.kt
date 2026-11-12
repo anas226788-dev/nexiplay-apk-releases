@@ -272,6 +272,13 @@ fun HomeScreen(
                         }
                     }
 
+                    // Non-intrusive Home Banner Ad (Start.io)
+                    item(key = "home_banner_ad") {
+                        com.nexiplay.app.ui.components.AppBannerAd(
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                        )
+                    }
+
                     // 9. Currently Airing / Simulcast Section
                     if (state.running.isNotEmpty()) {
                         item(key = "running_section") {
@@ -326,6 +333,13 @@ fun HomeScreen(
                                 }
                             )
                         }
+                    }
+
+                    // Start.io Native / MREC Ad (only rendered when Native Ads toggle is enabled)
+                    item(key = "home_native_ad") {
+                        com.nexiplay.app.ui.components.AppNativeAd(
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
                     }
 
                     // 13. Latest Anime Section (`page.tsx` line 280)

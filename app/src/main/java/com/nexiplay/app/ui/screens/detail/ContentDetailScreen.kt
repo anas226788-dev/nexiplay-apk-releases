@@ -1074,6 +1074,9 @@ fun ContentDetailScreen(
             }
         }
 
+        Spacer(Modifier.height(14.dp))
+        com.nexiplay.app.ui.components.AppBannerAd(modifier = Modifier.padding(horizontal = 16.dp))
+
         // ── 7. DOWNLOADS (for Movies) ──
         val validMovieDownloads = remember(state.downloads) {
             state.downloads.filter { it.hasAnyValidLink() }
@@ -1124,7 +1127,9 @@ fun ContentDetailScreen(
                     loadingKey = vaultLoadingKey,
                     errorMessage = vaultErrors["movie"],
                     onTriggerQuality = { quality ->
-                        triggerVaultDownload("movie", false, null, null, quality)
+                        com.nexiplay.app.data.util.AdManager.runWithDownloadAdGate(context) {
+                            triggerVaultDownload("movie", false, null, null, quality)
+                        }
                     }
                 )
             }
@@ -1555,13 +1560,15 @@ fun ContentDetailScreen(
                                         errorMessage = vaultErrors[epKeyPrefix],
                                         compact = true,
                                         onTriggerQuality = { quality ->
-                                            triggerVaultDownload(
-                                                epKeyPrefix,
-                                                true,
-                                                currentSeason.seasonNumber,
-                                                ep.episodeNumber,
-                                                quality
-                                            )
+                                            com.nexiplay.app.data.util.AdManager.runWithDownloadAdGate(context) {
+                                                triggerVaultDownload(
+                                                    epKeyPrefix,
+                                                    true,
+                                                    currentSeason.seasonNumber,
+                                                    ep.episodeNumber,
+                                                    quality
+                                                )
+                                            }
                                         }
                                     )
                                 }
@@ -1572,6 +1579,8 @@ fun ContentDetailScreen(
                 }
             }
         }
+
+        com.nexiplay.app.ui.components.AppNativeAd(modifier = Modifier.padding(horizontal = 16.dp))
 
         // ── 9. WEBSITE DETAILS & CAST SECTION CARD ──
         Spacer(Modifier.height(22.dp))
@@ -3463,8 +3472,10 @@ private fun DownloadLinkCard(
                         )
                         .bounceClick {
                             if (!isExpired) {
-                                trackDownload(context, movie, name, dl.resolution)
-                                openLink(url, context, navController)
+                                com.nexiplay.app.data.util.AdManager.runWithDownloadAdGate(context) {
+                                    trackDownload(context, movie, name, dl.resolution)
+                                    openLink(url, context, navController)
+                                }
                             }
                         }
                         .padding(horizontal = 12.dp),
@@ -3552,8 +3563,10 @@ private fun EpisodeDownloadLinkCard(
                         )
                         .bounceClick {
                             if (!isExpired) {
-                                trackDownload(context, movie, name, dl.resolution, ep.id, seasonNumber, ep.episodeNumber)
-                                openLink(url, context, navController)
+                                com.nexiplay.app.data.util.AdManager.runWithDownloadAdGate(context) {
+                                    trackDownload(context, movie, name, dl.resolution, ep.id, seasonNumber, ep.episodeNumber)
+                                    openLink(url, context, navController)
+                                }
                             }
                         }
                         .padding(horizontal = 10.dp),
