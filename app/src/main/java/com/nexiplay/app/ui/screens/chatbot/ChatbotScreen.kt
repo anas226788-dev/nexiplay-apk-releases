@@ -208,7 +208,7 @@ fun ChatbotScreen(
                         message = msg,
                         vm = vm,
                         onContentClick = { type, slug ->
-                            navController.navigate(Screen.ContentDetail.createRoute(type, slug))
+                            com.nexiplay.app.data.util.AdManager.openContentDetail(navController, type, slug)
                         },
                         onContactClick = {
                             navController.navigate(Screen.Contact.route)

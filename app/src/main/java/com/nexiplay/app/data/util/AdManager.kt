@@ -90,7 +90,6 @@ object AdManager {
     private const val KEY_LAST_STREAM_AD_MS = "last_stream_direct_link_ms"
     private const val KEY_LAST_SPONSOR_TASK_MS = "last_sponsor_task_direct_link_ms"
     private const val KEY_LAST_ANY_DIRECT_LINK_MS = "last_any_direct_link_ms"
-    private const val DEFAULT_INTERSTITIAL_COOLDOWN_MS = 180_000L // 3 minutes
     private const val DOWNLOAD_AD_PASS_WINDOW_MS = 8 * 60 * 1000L // 8 min pass after Download Direct Link
     private const val STREAM_AD_PASS_WINDOW_MS = 10 * 60 * 1000L // 10 min pass after Watch Now Direct Link
     private const val MIN_DIRECT_LINK_GAP_MS = 2 * 60 * 1000L // Never stack Watch + Download direct links within 2 min
@@ -133,6 +132,10 @@ object AdManager {
     private var isUnityInitialized = false
     private var isStartIoInitialized = false
     private var lastInterstitialShownAtMs = 0L
+    private var preloadedStartIoInterstitial: StartAppAd? = null
+    @Volatile private var isStartIoInterstitialReady = false
+    @Volatile private var isStartIoInterstitialLoading = false
+    private var lastStartIoPreloadFailMs = 0L
     @Volatile var isConfigLoaded = false
     @Volatile private var isStartupReadyForAds = false
     private var pendingActivity: java.lang.ref.WeakReference<Activity>? = null
@@ -414,9 +417,46 @@ object AdManager {
                     StartAppAd.disableSplash()
                 }
                 android.util.Log.d("AdManager", "✅ Start.io initialized with appId=$cleanId, testAds=$isTestAdsEnabled")
+                preloadStartIoInterstitial(appCtx)
             } catch (e: Exception) {
                 isStartIoInitialized = false
                 android.util.Log.e("AdManager", "❌ Start.io init failed", e)
+            }
+        } else if (isStartIoInitialized && !isStartIoInterstitialReady && !isStartIoInterstitialLoading) {
+            preloadStartIoInterstitial(context.applicationContext)
+        }
+    }
+
+    fun preloadStartIoInterstitial(context: Context, force: Boolean = false) {
+        if (startioAppId.isEmpty() || !isInterstitialEnabled || isUserPremium()) return
+        if (isStartIoInterstitialReady || isStartIoInterstitialLoading) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastStartIoPreloadFailMs < 15_000L) return
+
+        val hostContext = pendingActivity?.get()?.takeIf { !it.isFinishing && !it.isDestroyed }
+            ?: context.applicationContext
+        isStartIoInterstitialLoading = true
+        mainHandler.post {
+            try {
+                val ad = StartAppAd(hostContext)
+                ad.loadAd(StartAppAd.AdMode.AUTOMATIC, object : AdEventListener {
+                    override fun onReceiveAd(received: com.startapp.sdk.adsbase.Ad) {
+                        preloadedStartIoInterstitial = ad
+                        isStartIoInterstitialReady = true
+                        isStartIoInterstitialLoading = false
+                        android.util.Log.d("AdManager", "✅ Start.io interstitial preloaded & ready")
+                    }
+                    override fun onFailedToReceiveAd(failed: com.startapp.sdk.adsbase.Ad?) {
+                        preloadedStartIoInterstitial = null
+                        isStartIoInterstitialReady = false
+                        isStartIoInterstitialLoading = false
+                        lastStartIoPreloadFailMs = System.currentTimeMillis()
+                        android.util.Log.w("AdManager", "⚠️ Start.io interstitial preload no-fill: ${failed?.errorMessage}")
+                    }
+                })
+            } catch (e: Exception) {
+                isStartIoInterstitialLoading = false
+                lastStartIoPreloadFailMs = System.currentTimeMillis()
             }
         }
     }
@@ -1108,12 +1148,41 @@ object AdManager {
         }
     }
 
+    private fun getInterstitialCooldownMs(): Long {
+        return when {
+            adFrequencySession >= 5 -> 20_000L
+            adFrequencySession >= 3 -> 35_000L
+            adFrequencySession >= 2 -> 45_000L
+            else -> 60_000L
+        }
+    }
+
+    /**
+     * Navigates to ContentDetailScreen while triggering a Start.io (or configured network) interstitial
+     * respecting cooldown & VIP/Ad-Free perks.
+     */
+    fun openContentDetail(
+        navController: androidx.navigation.NavController,
+        type: String,
+        slug: String
+    ) {
+        if (slug.isBlank()) return
+        val hostContext = pendingActivity?.get()?.takeIf { !it.isFinishing && !it.isDestroyed }
+            ?: navController.context
+        val route = com.nexiplay.app.ui.navigation.Screen.ContentDetail.createRoute(type, slug)
+        showInterstitialWithCooldown(hostContext, cooldownMs = getInterstitialCooldownMs(), waitForColdLoad = false) {
+            navController.navigate(route)
+        }
+    }
+
     /**
      * Shows an interstitial at most once per [cooldownMs] so user navigation & watching stay smooth.
+     * Cooldown is ONLY recorded if an ad actually displays (no wasted cooldown on no-fill).
      */
     fun showInterstitialWithCooldown(
         context: Context,
-        cooldownMs: Long = DEFAULT_INTERSTITIAL_COOLDOWN_MS,
+        cooldownMs: Long = getInterstitialCooldownMs(),
+        waitForColdLoad: Boolean = true,
         onFinished: () -> Unit
     ) {
         if (!isInterstitialEnabled || isUserPremium()) {
@@ -1122,14 +1191,20 @@ object AdManager {
         }
         val now = System.currentTimeMillis()
         if (now - lastInterstitialShownAtMs < cooldownMs) {
+            if (currentNetwork != AdNetwork.UNITY && !isStartIoInterstitialReady && !isStartIoInterstitialLoading) {
+                preloadStartIoInterstitial(context.applicationContext)
+            }
             onFinished()
             return
         }
-        lastInterstitialShownAtMs = now
-        showInterstitialAd(context, onFinished)
+        showInterstitialAd(context, onFinished, waitForColdLoad = waitForColdLoad)
     }
 
-    fun showInterstitialAd(context: Context, onClosed: () -> Unit) {
+    fun showInterstitialAd(
+        context: Context,
+        onClosed: () -> Unit,
+        waitForColdLoad: Boolean = true
+    ) {
         if (!isInterstitialEnabled || isUserPremium()) {
             mainHandler.post { onClosed() }
             return
@@ -1154,11 +1229,11 @@ object AdManager {
         }
 
         when (currentNetwork) {
-            AdNetwork.STARTIO -> loadAndShowStartIoInterstitial(activity, wrappedOnClosed)
+            AdNetwork.STARTIO -> loadAndShowStartIoInterstitial(activity, wrappedOnClosed, waitForColdLoad = waitForColdLoad)
             AdNetwork.UNITY -> {
                 loadAndShowUnityInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
                     if (startioAppId.isNotEmpty()) {
-                        loadAndShowStartIoInterstitial(activity, wrappedOnClosed)
+                        loadAndShowStartIoInterstitial(activity, wrappedOnClosed, waitForColdLoad = waitForColdLoad)
                     } else {
                         wrappedOnClosed()
                     }
@@ -1173,7 +1248,7 @@ object AdManager {
                     } else {
                         wrappedOnClosed()
                     }
-                })
+                }, waitForColdLoad = waitForColdLoad)
             }
         }
     }
@@ -1215,6 +1290,7 @@ object AdManager {
                 if (settled.compareAndSet(false, true)) onFailed?.invoke() ?: onClosed()
             }
             override fun onAdOpened(adInfo: AdInfo?) {
+                lastInterstitialShownAtMs = System.currentTimeMillis()
                 mainHandler.removeCallbacks(timeoutRunnable)
             }
             override fun onAdShowSucceeded(adInfo: AdInfo?) {}
@@ -1240,7 +1316,8 @@ object AdManager {
     private fun loadAndShowStartIoInterstitial(
         activity: Activity,
         onClosed: () -> Unit,
-        onFailed: (() -> Unit)? = null
+        onFailed: (() -> Unit)? = null,
+        waitForColdLoad: Boolean = true
     ) {
         if (startioAppId.isEmpty() || activity.isFinishing || activity.isDestroyed) {
             onFailed?.invoke() ?: onClosed()
@@ -1251,13 +1328,47 @@ object AdManager {
         val settled = AtomicBoolean(false)
         val finishFail = {
             if (settled.compareAndSet(false, true)) {
+                preloadStartIoInterstitial(activity.applicationContext)
                 onFailed?.invoke() ?: onClosed()
             }
         }
         val finishClose = {
             if (settled.compareAndSet(false, true)) {
+                preloadStartIoInterstitial(activity.applicationContext, force = true)
                 onClosed()
             }
+        }
+
+        val showReadyAd: (StartAppAd) -> Boolean = { ad ->
+            ad.showAd(object : AdDisplayListener {
+                override fun adHidden(p0: com.startapp.sdk.adsbase.Ad?) { finishClose() }
+                override fun adDisplayed(p0: com.startapp.sdk.adsbase.Ad?) {
+                    lastInterstitialShownAtMs = System.currentTimeMillis()
+                }
+                override fun adClicked(p0: com.startapp.sdk.adsbase.Ad?) {}
+                override fun adNotDisplayed(p0: com.startapp.sdk.adsbase.Ad?) { finishFail() }
+            })
+        }
+
+        // Fast path: show preloaded interstitial immediately with 0ms delay
+        val cached = preloadedStartIoInterstitial
+        if (cached != null && (isStartIoInterstitialReady || cached.isReady)) {
+            preloadedStartIoInterstitial = null
+            isStartIoInterstitialReady = false
+            mainHandler.post {
+                val shown = try { showReadyAd(cached) } catch (_: Exception) { false }
+                if (!shown) finishFail()
+            }
+            return
+        }
+
+        // On content-card taps we prefer instant UI responsiveness: warm up in background and navigate cleanly
+        if (!waitForColdLoad) {
+            preloadStartIoInterstitial(activity.applicationContext, force = true)
+            if (settled.compareAndSet(false, true)) {
+                onFailed?.invoke() ?: onClosed()
+            }
+            return
         }
 
         val timeoutRunnable = Runnable { finishFail() }
@@ -1269,12 +1380,7 @@ object AdManager {
                 mainHandler.removeCallbacks(timeoutRunnable)
                 if (settled.get()) return
                 mainHandler.post {
-                    val shown = startAppAd.showAd(object : AdDisplayListener {
-                        override fun adHidden(p0: com.startapp.sdk.adsbase.Ad?) { finishClose() }
-                        override fun adDisplayed(p0: com.startapp.sdk.adsbase.Ad?) {}
-                        override fun adClicked(p0: com.startapp.sdk.adsbase.Ad?) {}
-                        override fun adNotDisplayed(p0: com.startapp.sdk.adsbase.Ad?) { finishFail() }
-                    })
+                    val shown = try { showReadyAd(startAppAd) } catch (_: Exception) { false }
                     if (!shown) finishFail()
                 }
             }
@@ -1289,12 +1395,17 @@ object AdManager {
         if (startioAppId.isEmpty()) return null
         initStartIo(context.applicationContext, startioAppId)
 
+        val density = context.resources.displayMetrics.density
+        val minHeightPx = ((if (isMrec) 250 else 50) * density).toInt()
+        val widthPx = ((if (isMrec) 300 else 320) * density).toInt()
+
         val container = FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                minHeightPx
             )
-            visibility = View.GONE
+            // Keep container measurable in Compose AndroidView so Start.io Banner loads reliably
+            visibility = View.VISIBLE
         }
 
         val listener = object : BannerListener {
@@ -1302,6 +1413,7 @@ object AdManager {
                 mainHandler.post {
                     container.visibility = View.VISIBLE
                     bannerView?.visibility = View.VISIBLE
+                    container.requestLayout()
                 }
             }
             override fun onFailedToReceiveAd(bannerView: View?) {
@@ -1316,12 +1428,11 @@ object AdManager {
         val banner = (if (isMrec) Mrec(context) else Banner(context)).apply {
             setBannerListener(listener)
         }
-        banner.visibility = View.GONE
         container.addView(
             banner,
             FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
+                widthPx,
+                minHeightPx,
                 Gravity.CENTER_HORIZONTAL
             )
         )

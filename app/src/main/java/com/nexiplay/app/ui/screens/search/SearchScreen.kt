@@ -312,7 +312,7 @@ fun SearchScreen(navController: NavController) {
                     items(results, key = { it.id }) { movie ->
                         MovieCardGrid(
                             movie = movie,
-                            onClick = { navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug)) }
+                            onClick = { com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug) }
                         )
                     }
                 }

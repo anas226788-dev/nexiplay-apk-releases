@@ -374,7 +374,7 @@ fun VibeCheckScreen(navController: NavController) {
                                                 movie = m,
                                                 onClick = {
                                                     if (m.slug.isNotBlank()) {
-                                                        navController.navigate(Screen.ContentDetail.createRoute(m.type, m.slug))
+                                                        com.nexiplay.app.data.util.AdManager.openContentDetail(navController, m.type, m.slug)
                                                     }
                                                 }
                                             )
@@ -516,7 +516,7 @@ fun VibeCheckScreen(navController: NavController) {
                                     fillWidth = true,
                                     onClick = {
                                         if (m.slug.isNotBlank()) {
-                                            navController.navigate(Screen.ContentDetail.createRoute(m.type, m.slug))
+                                            com.nexiplay.app.data.util.AdManager.openContentDetail(navController, m.type, m.slug)
                                         }
                                     }
                                 )

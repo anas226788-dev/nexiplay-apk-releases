@@ -173,7 +173,7 @@ fun HomeScreen(
                             WebsiteHeroSlider(
                                 movies = state.trending.take(6),
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -231,8 +231,10 @@ fun HomeScreen(
                                         }
 
                                         if (resolvedSlug.isNotBlank()) {
-                                            navController.navigate(
-                                                Screen.ContentDetail.createRoute(resolvedType, resolvedSlug)
+                                            com.nexiplay.app.data.util.AdManager.openContentDetail(
+                                                navController,
+                                                resolvedType,
+                                                resolvedSlug
                                             )
                                         }
                                     }
@@ -266,7 +268,7 @@ fun HomeScreen(
                                 movies = state.trending,
                                 onSeeAll = { navigateToBrowseTab(0) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -287,7 +289,7 @@ fun HomeScreen(
                                 movies = state.running,
                                 onSeeAll = { navigateToBrowseTab(4) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -301,7 +303,7 @@ fun HomeScreen(
                                 movies = state.latestAdditions,
                                 onSeeAll = { navigateToBrowseTab(0) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -315,7 +317,7 @@ fun HomeScreen(
                                 movies = state.recentMovies,
                                 onSeeAll = { navigateToBrowseTab(1) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -329,7 +331,7 @@ fun HomeScreen(
                                 movies = state.recentSeries,
                                 onSeeAll = { navigateToBrowseTab(3) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }
@@ -350,7 +352,7 @@ fun HomeScreen(
                                 movies = state.recentAnime,
                                 onSeeAll = { navigateToBrowseTab(2) },
                                 onMovieClick = { movie ->
-                                    navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                                 }
                             )
                         }

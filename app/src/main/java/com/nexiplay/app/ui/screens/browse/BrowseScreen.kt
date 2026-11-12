@@ -390,7 +390,7 @@ fun BrowseScreen(
                         MovieCardGrid(
                             movie = movie,
                             onClick = {
-                                navController.navigate(Screen.ContentDetail.createRoute(movie.type, movie.slug))
+                                com.nexiplay.app.data.util.AdManager.openContentDetail(navController, movie.type, movie.slug)
                             }
                         )
                     }

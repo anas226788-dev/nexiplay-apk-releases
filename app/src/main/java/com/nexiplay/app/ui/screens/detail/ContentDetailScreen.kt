@@ -1682,7 +1682,7 @@ fun ContentDetailScreen(
                     MovieCard(
                         movie = related,
                         onClick = {
-                            navController.navigate(Screen.ContentDetail.createRoute(related.type, related.slug))
+                            com.nexiplay.app.data.util.AdManager.openContentDetail(navController, related.type, related.slug)
                         },
                         modifier = Modifier.width(130.dp),
                     )

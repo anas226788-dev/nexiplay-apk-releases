@@ -118,10 +118,9 @@ fun NexiPlayNavHost(
             ) {
                 com.nexiplay.app.data.util.AppUpdatePrefetchWorker.enqueue(context)
             }
-            delay(450L)
-            context.findActivity()?.let { act ->
-                com.nexiplay.app.data.util.AdManager.markStartupReadyForAds(act)
-            }
+            com.nexiplay.app.data.util.AdManager.markStartupReadyForAds(
+                context.findActivity() ?: return@LaunchedEffect
+            )
         }
     }
 

@@ -168,7 +168,7 @@ fun HistoryScreen(navController: NavController) {
                                 if (type == "novel") {
                                     navController.navigate("novel_detail/$slug")
                                 } else {
-                                    navController.navigate(Screen.ContentDetail.createRoute(type, slug))
+                                    com.nexiplay.app.data.util.AdManager.openContentDetail(navController, type, slug)
                                 }
                             }
                         },
