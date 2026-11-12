@@ -63,6 +63,9 @@ data class AdSettings(
     @SerialName("is_verification_enabled") val isVerificationEnabled: Boolean? = null,
     @SerialName("verification_ad_url_1") val verificationAdUrl1: String? = null,
     @SerialName("verification_ad_url_2") val verificationAdUrl2: String? = null,
+    @SerialName("is_novel_verification_enabled") val isNovelVerificationEnabled: Boolean? = null,
+    @SerialName("novel_ad_url_1") val novelAdUrl1: String? = null,
+    @SerialName("novel_ad_url_2") val novelAdUrl2: String? = null,
     @SerialName("coin_popup_enabled") val coinPopupEnabled: Boolean? = true,
     @SerialName("coin_popup_title") val coinPopupTitle: String? = null,
     @SerialName("coin_popup_message") val coinPopupMessage: String? = null,
@@ -88,10 +91,14 @@ object AdManager {
     private const val PREFS_ADS = "NexiPlayAdsPrefs"
     private const val KEY_LAST_DOWNLOAD_AD_MS = "last_download_direct_link_ms"
     private const val KEY_LAST_STREAM_AD_MS = "last_stream_direct_link_ms"
+    private const val KEY_LAST_EPISODE_AD_MS = "last_episode_direct_link_ms"
+    private const val KEY_LAST_NOVEL_AD_MS = "last_novel_direct_link_ms"
     private const val KEY_LAST_SPONSOR_TASK_MS = "last_sponsor_task_direct_link_ms"
     private const val KEY_LAST_ANY_DIRECT_LINK_MS = "last_any_direct_link_ms"
     private const val DOWNLOAD_AD_PASS_WINDOW_MS = 8 * 60 * 1000L // 8 min pass after Download Direct Link
     private const val STREAM_AD_PASS_WINDOW_MS = 10 * 60 * 1000L // 10 min pass after Watch Now Direct Link
+    private const val NOVEL_AD_PASS_WINDOW_MS = 5 * 60 * 1000L // 5 min pass window for Novel chapters
+    private const val EPISODE_AD_COOLDOWN_MS = 30 * 1000L // 30s anti-spam cooldown when switching episodes
     private const val MIN_DIRECT_LINK_GAP_MS = 2 * 60 * 1000L // Never stack Watch + Download direct links within 2 min
     private const val SPONSOR_TASK_COOLDOWN_MS = 10 * 60 * 1000L // 10 min cooldown for Coin Center sponsor offer
 
@@ -123,6 +130,9 @@ object AdManager {
     var isStreamVerificationEnabled = false
     var verificationAdUrl1 = ""
     var verificationAdUrl2 = ""
+    var isNovelVerificationEnabled = false
+    var novelAdUrl1 = ""
+    var novelAdUrl2 = ""
 
     var isUserAdFree = false
     var userBadgeType = ""  // "vip", "elite_pro", "gold_vip", "elite"
@@ -544,6 +554,9 @@ object AdManager {
                     isStreamVerificationEnabled = it.isVerificationEnabled ?: false
                     verificationAdUrl1 = it.verificationAdUrl1.orEmpty().trim()
                     verificationAdUrl2 = it.verificationAdUrl2.orEmpty().trim()
+                    isNovelVerificationEnabled = it.isNovelVerificationEnabled ?: false
+                    novelAdUrl1 = it.novelAdUrl1.orEmpty().trim()
+                    novelAdUrl2 = it.novelAdUrl2.orEmpty().trim()
 
                     coinPopupEnabled = it.coinPopupEnabled ?: true
                     if (!it.coinPopupTitle.isNullOrEmpty()) coinPopupTitle = it.coinPopupTitle
@@ -621,6 +634,12 @@ object AdManager {
             ?: normalizeHttpUrl(directLinkUrl)
     }
 
+    fun getNovelDirectLinkUrl(): String? {
+        return normalizeHttpUrl(novelAdUrl1)
+            ?: normalizeHttpUrl(novelAdUrl2)
+            ?: normalizeHttpUrl(directLinkUrl)
+    }
+
     fun getRewardedDirectLinkUrl(): String? {
         return normalizeHttpUrl(directLinkUrl)
             ?: normalizeHttpUrl(downloadAdUrl1)
@@ -668,6 +687,14 @@ object AdManager {
             adFrequencySession >= 5 -> 4 * 60 * 1000L
             adFrequencySession >= 2 -> 6 * 60 * 1000L
             else -> STREAM_AD_PASS_WINDOW_MS
+        }
+    }
+
+    private fun getNovelPassWindowMs(): Long {
+        return when {
+            adFrequencySession >= 5 -> 2 * 60 * 1000L
+            adFrequencySession >= 2 -> 3 * 60 * 1000L
+            else -> NOVEL_AD_PASS_WINDOW_MS
         }
     }
 
@@ -744,6 +771,95 @@ object AdManager {
                     .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onProceedToWatch()
+            }
+        )
+    }
+
+    /**
+     * Adsterra Direct Link overlay when user advances to another episode while watching.
+     * Uses a 30s anti-double-tap cooldown and ONLY commits the episode change inside onCompleted
+     * so scrapers, active streams, and current episode state stay untouched if cancelled.
+     */
+    fun runWithEpisodeAdGate(context: Context, onProceedToEpisode: () -> Unit): Boolean {
+        if (isUserPremium()) {
+            onProceedToEpisode()
+            return false
+        }
+
+        val streamUrl = getStreamDirectLinkUrl()
+        val gateEnabled = isStreamVerificationEnabled || isDirectLinkAdsEnabled
+        if (streamUrl.isNullOrBlank() || !gateEnabled) {
+            onProceedToEpisode()
+            return false
+        }
+
+        val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastEpMs = prefs.getLong(KEY_LAST_EPISODE_AD_MS, 0L)
+        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
+        if (now - lastEpMs < EPISODE_AD_COOLDOWN_MS || now - lastAnyMs < 15_000L) {
+            onProceedToEpisode()
+            return false
+        }
+
+        return showDirectLinkOverlay(
+            url = streamUrl,
+            title = "Preparing Next Episode",
+            durationSeconds = 12,
+            actionLabel = "Watch Episode",
+            onCompleted = {
+                val ts = System.currentTimeMillis()
+                prefs.edit()
+                    .putLong(KEY_LAST_EPISODE_AD_MS, ts)
+                    .putLong(KEY_LAST_STREAM_AD_MS, ts)
+                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
+                    .apply()
+                onProceedToEpisode()
+            }
+        )
+    }
+
+    /**
+     * Frequency-capped Adsterra Direct Link overlay when opening or switching Novel chapters.
+     */
+    fun runWithNovelAdGate(
+        context: Context,
+        actionLabel: String = "Read Chapter",
+        onProceedToRead: () -> Unit
+    ) {
+        if (isUserPremium()) {
+            onProceedToRead()
+            return
+        }
+
+        val novelUrl = getNovelDirectLinkUrl()
+        val gateEnabled = isNovelVerificationEnabled || isDirectLinkAdsEnabled
+        if (novelUrl.isNullOrBlank() || !gateEnabled) {
+            onProceedToRead()
+            return
+        }
+
+        val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastNovelMs = prefs.getLong(KEY_LAST_NOVEL_AD_MS, 0L)
+        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
+        if (now - lastNovelMs < getNovelPassWindowMs() || now - lastAnyMs < 60_000L) {
+            onProceedToRead()
+            return
+        }
+
+        showDirectLinkOverlay(
+            url = novelUrl,
+            title = "Preparing Chapter",
+            durationSeconds = 12,
+            actionLabel = actionLabel,
+            onCompleted = {
+                val ts = System.currentTimeMillis()
+                prefs.edit()
+                    .putLong(KEY_LAST_NOVEL_AD_MS, ts)
+                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
+                    .apply()
+                onProceedToRead()
             }
         )
     }

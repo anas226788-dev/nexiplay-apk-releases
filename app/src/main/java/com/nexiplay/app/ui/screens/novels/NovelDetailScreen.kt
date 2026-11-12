@@ -189,7 +189,10 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                 val startChapterNum = chapters.firstOrNull()?.chapterNumber ?: 1
                 Button(
                     onClick = {
-                        com.nexiplay.app.data.util.AdManager.showAlternatingAd(context) {
+                        com.nexiplay.app.data.util.AdManager.runWithNovelAdGate(
+                            context = context,
+                            actionLabel = "Read Chapter"
+                        ) {
                             navController.navigate("novel_reader/${n.id}/$startChapterNum")
                         }
                     },
@@ -203,7 +206,9 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
+            com.nexiplay.app.ui.components.AppBannerAd()
+            Spacer(Modifier.height(8.dp))
 
             // ── Description ──
             if (!n.description.isNullOrBlank()) {
@@ -307,7 +312,10 @@ fun NovelDetailScreen(navController: NavController, slug: String) {
                             .padding(vertical = 3.dp)
                             .background(themeCard(), RoundedCornerShape(10.dp))
                             .clickable {
-                                com.nexiplay.app.data.util.AdManager.showAlternatingAd(context) {
+                                com.nexiplay.app.data.util.AdManager.runWithNovelAdGate(
+                                    context = context,
+                                    actionLabel = "Read Chapter"
+                                ) {
                                     navController.navigate("novel_reader/${n.id}/${ch.chapterNumber}")
                                 }
                             }

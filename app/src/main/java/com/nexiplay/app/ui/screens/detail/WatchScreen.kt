@@ -621,6 +621,17 @@ fun WatchScreen(
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var resolveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val activeDirectLink by com.nexiplay.app.data.util.AdManager.directLinkOverlay.collectAsState()
+
+    LaunchedEffect(activeDirectLink) {
+        try {
+            if (activeDirectLink != null) {
+                webViewRef.value?.onPause()
+            } else {
+                webViewRef.value?.onResume()
+            }
+        } catch (_: Exception) {}
+    }
 
     // Fullscreen state
     var isFullscreen by remember { mutableStateOf(false) }
@@ -1076,9 +1087,6 @@ fun WatchScreen(
             }
 
             if (nextEp != null) {
-                selectedSeasonIdx = nextSeasonIdx
-                selectedEpisode = nextEp
-                markEpisodeWatched(nextEp.id)
                 val sNum = state.seasons.getOrNull(nextSeasonIdx)?.seasonNumber ?: 1
                 val currentServers = getAvailableServers(
                     type = effectiveType,
@@ -1088,8 +1096,13 @@ fun WatchScreen(
                     seasonNumber = sNum
                 )
                 val matchedServer = currentServers.find { it.id == selectedServerId } ?: currentServers.firstOrNull()
-                if (matchedServer != null) {
-                    activateAndResolveServer(matchedServer, sNum, nextEp.episodeNumber)
+                com.nexiplay.app.data.util.AdManager.runWithEpisodeAdGate(context) {
+                    selectedSeasonIdx = nextSeasonIdx
+                    selectedEpisode = nextEp
+                    markEpisodeWatched(nextEp.id)
+                    if (matchedServer != null) {
+                        activateAndResolveServer(matchedServer, sNum, nextEp.episodeNumber)
+                    }
                 }
             }
         }
@@ -2294,8 +2307,6 @@ fun WatchScreen(
                                                                     )
                                                                     .clickable {
                                                                         if (selectedEpisode?.id == ep.id) return@clickable
-                                                                        selectedEpisode = ep
-                                                                        markEpisodeWatched(ep.id)
                                                                         val sNum = state.seasons.getOrNull(selectedSeasonIdx)?.seasonNumber ?: 1
                                                                         val currentServers = getAvailableServers(
                                                                             type = effectiveType,
@@ -2305,8 +2316,10 @@ fun WatchScreen(
                                                                             seasonNumber = sNum
                                                                         )
                                                                         val matchedServer = currentServers.find { it.id == selectedServerId } ?: currentServers.firstOrNull()
-                                                                        if (matchedServer != null) {
-                                                                            com.nexiplay.app.data.util.AdManager.showInterstitialWithCooldown(context) {
+                                                                        com.nexiplay.app.data.util.AdManager.runWithEpisodeAdGate(context) {
+                                                                            selectedEpisode = ep
+                                                                            markEpisodeWatched(ep.id)
+                                                                            if (matchedServer != null) {
                                                                                 activateAndResolveServer(matchedServer, sNum, ep.episodeNumber)
                                                                             }
                                                                         }
@@ -2583,6 +2596,23 @@ private fun InlineWatchPlayer(
     var showQualityDialog by remember { mutableStateOf(false) }
 
     var triedProxyFallback by remember(streamUrl) { mutableStateOf(false) }
+
+    val activeDirectLink by com.nexiplay.app.data.util.AdManager.directLinkOverlay.collectAsState()
+    var pausedForOverlayUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(activeDirectLink, exoPlayer, streamUrl) {
+        val player = exoPlayer ?: return@LaunchedEffect
+        if (activeDirectLink != null) {
+            if (player.isPlaying) {
+                pausedForOverlayUrl = streamUrl
+                player.pause()
+            }
+        } else if (pausedForOverlayUrl == streamUrl) {
+            pausedForOverlayUrl = null
+            player.play()
+        } else {
+            pausedForOverlayUrl = null
+        }
+    }
 
     // Keep device screen awake while video is actively playing or buffering; release when paused or disposed
     val shouldKeepScreenOn = isPlaying || isBuffering

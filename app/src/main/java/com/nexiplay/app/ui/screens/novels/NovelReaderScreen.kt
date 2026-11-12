@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -46,6 +47,7 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
     var currentChapterNum by remember(chapterNumber) { mutableIntStateOf(chapterNumber) }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     fun loadChapter(num: Int) {
         scope.launch {
@@ -241,6 +243,8 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
             )
 
+            com.nexiplay.app.ui.components.AppBannerAd(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+
             // ── Navigation Buttons ──
             Row(
                 modifier = Modifier
@@ -253,8 +257,13 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                 OutlinedButton(
                     onClick = {
                         if (currentChapterNum > 1) {
-                            currentChapterNum--
-                            loadChapter(currentChapterNum)
+                            com.nexiplay.app.data.util.AdManager.runWithNovelAdGate(
+                                context = context,
+                                actionLabel = "Read Chapter"
+                            ) {
+                                currentChapterNum--
+                                loadChapter(currentChapterNum)
+                            }
                         }
                     },
                     enabled = currentChapterNum > 1,
@@ -271,8 +280,13 @@ fun NovelReaderScreen(navController: NavController, novelId: String, chapterNumb
                 Button(
                     onClick = {
                         if (currentChapterNum < totalChapters) {
-                            currentChapterNum++
-                            loadChapter(currentChapterNum)
+                            com.nexiplay.app.data.util.AdManager.runWithNovelAdGate(
+                                context = context,
+                                actionLabel = "Read Chapter"
+                            ) {
+                                currentChapterNum++
+                                loadChapter(currentChapterNum)
+                            }
                         }
                     },
                     enabled = currentChapterNum < totalChapters,
