@@ -801,21 +801,21 @@ private fun EarnCoinsSection(
             }
         )
 
-        // 1b. High-CTR Sponsor Offer (Adsterra Direct Link)
+        // 1b. High-CTR Bonus Explorer Task (Direct Link with 10s Overlay Timer)
         if (AdManager.hasDirectLinkConfigured()) {
-            val sponsorReward = 15 * mult
+            val bonusReward = 15 * mult
             TaskItem(
-                title = "Visit Sponsor Offer",
-                desc = "Open sponsor link & return for instant coins (10m cooldown)",
-                icon = Icons.Rounded.AdsClick,
-                reward = "+$sponsorReward",
+                title = "Bonus Coin Explorer",
+                desc = "Explore partner page for 10s to unlock bonus coins",
+                icon = Icons.Rounded.Stars,
+                reward = "+$bonusReward",
                 isFeatured = true,
                 onClick = {
-                    AdManager.triggerSponsorDirectLinkTask(
+                    AdManager.triggerDirectLinkCoinTask(
                         context = context,
                         onRewarded = {
                             vm.claimAdReward(15, context)
-                            Toast.makeText(context, "Sponsor verified! +$sponsorReward Coins added 🪙", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Verified! +$bonusReward Bonus Coins added 🪙", Toast.LENGTH_LONG).show()
                         },
                         onUnavailableOrCooldown = { msg ->
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()

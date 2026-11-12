@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             NexiPlayTheme {
                 NexiPlayNavHost()
+                com.nexiplay.app.ui.components.DirectLinkOverlayDialog()
             }
         }
 

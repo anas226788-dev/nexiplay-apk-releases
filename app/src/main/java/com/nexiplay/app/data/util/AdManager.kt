@@ -73,6 +73,16 @@ data class AdSettings(
     @SerialName("app_enabled_servers") val appEnabledServers: String? = null
 )
 
+data class DirectLinkOverlaySession(
+    val id: Long,
+    val url: String,
+    val title: String,
+    val durationSeconds: Int,
+    val actionLabel: String,
+    val onCompleted: () -> Unit,
+    val onCancelled: () -> Unit = {}
+)
+
 object AdManager {
     private val mainHandler = Handler(Looper.getMainLooper())
     private const val PREFS_ADS = "NexiPlayAdsPrefs"
@@ -130,6 +140,8 @@ object AdManager {
     val premiumState: StateFlow<Boolean> = _premiumState.asStateFlow()
     private val _configLoadedFlow = MutableStateFlow(false)
     val configLoadedFlow: StateFlow<Boolean> = _configLoadedFlow.asStateFlow()
+    private val _directLinkOverlay = MutableStateFlow<DirectLinkOverlaySession?>(null)
+    val directLinkOverlay: StateFlow<DirectLinkOverlaySession?> = _directLinkOverlay.asStateFlow()
     private val _badgeUpdateTick = MutableStateFlow(0L)
     val badgeUpdateTick: StateFlow<Long> = _badgeUpdateTick.asStateFlow()
 
@@ -441,7 +453,14 @@ object AdManager {
 
                     currentNetwork = when (it.adNetwork?.trim()?.uppercase()) {
                         "STARTIO" -> AdNetwork.STARTIO
-                        "UNITY" -> if (unityAppKey.isBlank() && startioAppId.isNotBlank()) AdNetwork.STARTIO else AdNetwork.UNITY
+                        "UNITY" -> {
+                            val isRawNumericGameId = unityAppKey.isNotBlank() && unityAppKey.all { ch -> ch.isDigit() }
+                            if ((unityAppKey.isBlank() || isRawNumericGameId) && startioAppId.isNotBlank()) {
+                                AdNetwork.STARTIO
+                            } else {
+                                AdNetwork.UNITY
+                            }
+                        }
                         "BOTH" -> AdNetwork.BOTH
                         else -> if (startioAppId.isNotBlank()) AdNetwork.STARTIO else AdNetwork.BOTH
                     }
@@ -592,45 +611,86 @@ object AdManager {
         }
     }
 
+    fun showDirectLinkOverlay(
+        url: String,
+        title: String,
+        durationSeconds: Int,
+        actionLabel: String,
+        onCompleted: () -> Unit,
+        onCancelled: () -> Unit = {}
+    ): Boolean {
+        val cleanUrl = normalizeHttpUrl(url) ?: return false
+        mainHandler.post {
+            _directLinkOverlay.value = DirectLinkOverlaySession(
+                id = System.currentTimeMillis(),
+                url = cleanUrl,
+                title = title,
+                durationSeconds = durationSeconds.coerceAtLeast(3),
+                actionLabel = actionLabel,
+                onCompleted = onCompleted,
+                onCancelled = onCancelled
+            )
+        }
+        return true
+    }
+
+    fun dismissDirectLinkOverlay(completed: Boolean) {
+        val session = _directLinkOverlay.value ?: return
+        _directLinkOverlay.value = null
+        mainHandler.post {
+            if (completed) {
+                session.onCompleted()
+            } else {
+                session.onCancelled()
+            }
+        }
+    }
+
     /**
-     * Frequency-capped Adsterra Direct Link gate when user taps "Watch Now" or an Episode "Watch" button.
-     * Navigates to the player underneath so the video loads immediately while Chrome Custom Tab is open on top.
+     * Frequency-capped Adsterra Direct Link overlay when user taps "Watch Now" or Episode "Watch".
+     * Shows a 5s live countdown overlay inside the app before opening the player.
      */
     fun runWithStreamAdGate(context: Context, onProceedToWatch: () -> Unit) {
-        onProceedToWatch()
-        if (isUserPremium()) return
+        if (isUserPremium()) {
+            onProceedToWatch()
+            return
+        }
 
-        val streamUrl = getStreamDirectLinkUrl() ?: return
+        val streamUrl = getStreamDirectLinkUrl()
         val gateEnabled = isStreamVerificationEnabled || isDirectLinkAdsEnabled
-        if (!gateEnabled) return
+        if (streamUrl.isNullOrBlank() || !gateEnabled) {
+            onProceedToWatch()
+            return
+        }
 
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastStreamMs = prefs.getLong(KEY_LAST_STREAM_AD_MS, 0L)
         val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
         if (now - lastStreamMs < getStreamPassWindowMs() || now - lastAnyMs < MIN_DIRECT_LINK_GAP_MS) {
+            onProceedToWatch()
             return
         }
 
-        prefs.edit()
-            .putLong(KEY_LAST_STREAM_AD_MS, now)
-            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
-            .apply()
-
-        mainHandler.post {
-            if (openExternalDirectLink(context, streamUrl)) {
-                android.widget.Toast.makeText(
-                    context,
-                    "Loading player behind sponsor — close tab to watch",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
+        showDirectLinkOverlay(
+            url = streamUrl,
+            title = "Preparing Stream",
+            durationSeconds = 5,
+            actionLabel = "Watch Now",
+            onCompleted = {
+                val ts = System.currentTimeMillis()
+                prefs.edit()
+                    .putLong(KEY_LAST_STREAM_AD_MS, ts)
+                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
+                    .apply()
+                onProceedToWatch()
             }
-        }
+        )
     }
 
     /**
-     * Frequency-capped Adsterra Direct Link gate before starting a movie/episode download.
-     * Skips VIP/Ad-Free users and grants a pass window after one Direct Link open to protect UX.
+     * Frequency-capped Adsterra Direct Link overlay before starting a movie/episode download.
+     * Shows a 6s live countdown overlay inside the app, then starts the download.
      */
     fun runWithDownloadAdGate(context: Context, onUnlocked: () -> Unit) {
         if (isUserPremium()) {
@@ -653,32 +713,34 @@ object AdManager {
             return
         }
 
-        prefs.edit()
-            .putLong(KEY_LAST_DOWNLOAD_AD_MS, now)
-            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
-            .apply()
-        val launched = openExternalDirectLink(context, directUrl)
-        if (launched) {
-            android.widget.Toast.makeText(
-                context,
-                "Sponsor link opened — starting your download...",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-        }
-        onUnlocked()
+        showDirectLinkOverlay(
+            url = directUrl,
+            title = "Unlocking Fast Download",
+            durationSeconds = 6,
+            actionLabel = "Download Now",
+            onCompleted = {
+                val ts = System.currentTimeMillis()
+                prefs.edit()
+                    .putLong(KEY_LAST_DOWNLOAD_AD_MS, ts)
+                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
+                    .apply()
+                onUnlocked()
+            }
+        )
     }
 
     /**
-     * Intentional high-CTR Sponsor Bonus task for Coin Center (10-min cooldown).
+     * Intentional Coin Center bonus explorer task (10s overlay countdown + 10m cooldown).
+     * Rewards strictly when the full 10s timer finishes.
      */
-    fun triggerSponsorDirectLinkTask(
+    fun triggerDirectLinkCoinTask(
         context: Context,
         onRewarded: () -> Unit,
         onUnavailableOrCooldown: (String) -> Unit
     ) {
         val url = getRewardedDirectLinkUrl()
         if (!isDirectLinkAdsEnabled || url.isNullOrBlank()) {
-            onUnavailableOrCooldown("Sponsor offer is currently unavailable.")
+            onUnavailableOrCooldown("Bonus task is currently unavailable.")
             return
         }
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
@@ -687,28 +749,36 @@ object AdManager {
         val remainingMs = SPONSOR_TASK_COOLDOWN_MS - (now - lastMs)
         if (remainingMs > 0L) {
             val mins = maxOf(1L, (remainingMs + 59_999L) / 60_000L)
-            onUnavailableOrCooldown("Sponsor bonus available again in ${mins}m.")
+            onUnavailableOrCooldown("Bonus task available again in ${mins}m.")
             return
         }
-        if (!openExternalDirectLink(context, url)) {
-            onUnavailableOrCooldown("Couldn't open sponsor link.")
-            return
-        }
-        prefs.edit()
-            .putLong(KEY_LAST_SPONSOR_TASK_MS, now)
-            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
-            .apply()
-        mainHandler.postDelayed({
-            onRewarded()
-        }, 3000L)
+
+        showDirectLinkOverlay(
+            url = url,
+            title = "Bonus Coin Verification",
+            durationSeconds = 10,
+            actionLabel = "Claim Coins",
+            onCompleted = {
+                val ts = System.currentTimeMillis()
+                prefs.edit()
+                    .putLong(KEY_LAST_SPONSOR_TASK_MS, ts)
+                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
+                    .apply()
+                onRewarded()
+            },
+            onCancelled = {
+                onUnavailableOrCooldown("Please stay for the full 10s timer to claim coins.")
+            }
+        )
     }
 
     fun showRewardedAd(
         context: Context,
         onRewarded: () -> Unit,
-        onFailed: (String) -> Unit
+        onFailed: (String) -> Unit,
+        allowPremiumBypass: Boolean = false
     ) {
-        if (isUserPremium()) {
+        if (allowPremiumBypass && isUserPremium()) {
             mainHandler.post { onRewarded() }
             return
         }
@@ -735,7 +805,7 @@ object AdManager {
                     activity = activity,
                     onRewarded = onRewarded,
                     onFailed = { unityErr ->
-                        // Safety fallback to Start.io then Adsterra if configured
+                        // Safety fallback to Start.io then Direct Link Overlay if configured
                         if (startioAppId.isNotEmpty()) {
                             loadAndShowStartIo(
                                 activity = activity,
@@ -785,17 +855,15 @@ object AdManager {
         onFailed: (String) -> Unit
     ) {
         val fallbackUrl = if (isDirectLinkAdsEnabled) getRewardedDirectLinkUrl() else null
-        if (fallbackUrl != null && openExternalDirectLink(activity, fallbackUrl)) {
-            android.widget.Toast.makeText(
-                activity,
-                "Opening sponsor link to unlock reward...",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-            mainHandler.postDelayed({
-                if (!activity.isFinishing && !activity.isDestroyed) {
-                    onRewarded()
-                }
-            }, 2500L)
+        if (fallbackUrl != null && !activity.isFinishing && !activity.isDestroyed) {
+            showDirectLinkOverlay(
+                url = fallbackUrl,
+                title = "Reward Verification",
+                durationSeconds = 10,
+                actionLabel = "Claim Reward",
+                onCompleted = { onRewarded() },
+                onCancelled = { onFailed("Please complete the 10s ad timer to earn the reward.") }
+            )
         } else {
             mainHandler.post { onFailed(previousError) }
         }
@@ -930,6 +998,7 @@ object AdManager {
         val videoCompleted = AtomicBoolean(false)
         val adDisplayed = AtomicBoolean(false)
         val adClicked = AtomicBoolean(false)
+        var displayedAtMs = 0L
 
         val fallbackToNext: (String) -> Unit = { err ->
             if (stageResolved.compareAndSet(false, true)) {
@@ -960,6 +1029,7 @@ object AdManager {
                     }
                     val shown = startAppAd.showAd(object : AdDisplayListener {
                         override fun adDisplayed(shownAd: com.startapp.sdk.adsbase.Ad?) {
+                            displayedAtMs = System.currentTimeMillis()
                             adDisplayed.set(true)
                         }
 
@@ -980,9 +1050,12 @@ object AdManager {
                                     onFailed("Please watch the full ad to earn the reward.")
                                 }
                             } else {
-                                // Non-video AUTOMATIC display/interactive reward fallback
-                                if (adDisplayed.get() || adClicked.get()) {
+                                // Non-video AUTOMATIC display/interactive reward fallback (require genuine display/view)
+                                val viewedMs = if (displayedAtMs > 0L) System.currentTimeMillis() - displayedAtMs else 0L
+                                if (adDisplayed.get() && (adClicked.get() || viewedMs >= 2000L)) {
                                     onRewarded()
+                                } else if (adDisplayed.get()) {
+                                    onFailed("Please view the ad for a moment before closing.")
                                 } else {
                                     runStartIoRewardStage(
                                         activity,

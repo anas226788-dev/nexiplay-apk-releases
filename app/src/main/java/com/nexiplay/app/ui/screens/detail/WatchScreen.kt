@@ -1865,7 +1865,8 @@ fun WatchScreen(
                                             },
                                             onFailed = {
                                                 android.widget.Toast.makeText(context, "Failed to load ad: $it", android.widget.Toast.LENGTH_SHORT).show()
-                                            }
+                                            },
+                                            allowPremiumBypass = true
                                         )
                                     } else {
                                         com.nexiplay.app.data.util.AdManager.showInterstitialWithCooldown(context) {
