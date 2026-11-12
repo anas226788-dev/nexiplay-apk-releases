@@ -773,7 +773,9 @@ fun ContentDetailScreen(
                                     episodeNumber = firstEp?.episodeNumber ?: 1
                                 )
                             }
-                            navController.navigate("watch/$actualType/${movie.slug}")
+                            com.nexiplay.app.data.util.AdManager.runWithStreamAdGate(context) {
+                                navController.navigate("watch/$actualType/${movie.slug}")
+                            }
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -1501,7 +1503,9 @@ fun ContentDetailScreen(
                                                     seasonNumber = currentSeason.seasonNumber,
                                                     episodeNumber = ep.episodeNumber
                                                 )
-                                                navController.navigate("watch/$actualType/${movie.slug}")
+                                                com.nexiplay.app.data.util.AdManager.runWithStreamAdGate(context) {
+                                                    navController.navigate("watch/$actualType/${movie.slug}")
+                                                }
                                             }
                                             .padding(horizontal = 10.dp, vertical = 6.dp)
                                     ) {

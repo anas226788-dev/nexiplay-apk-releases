@@ -77,8 +77,14 @@ object AdManager {
     private val mainHandler = Handler(Looper.getMainLooper())
     private const val PREFS_ADS = "NexiPlayAdsPrefs"
     private const val KEY_LAST_DOWNLOAD_AD_MS = "last_download_direct_link_ms"
+    private const val KEY_LAST_STREAM_AD_MS = "last_stream_direct_link_ms"
+    private const val KEY_LAST_SPONSOR_TASK_MS = "last_sponsor_task_direct_link_ms"
+    private const val KEY_LAST_ANY_DIRECT_LINK_MS = "last_any_direct_link_ms"
     private const val DEFAULT_INTERSTITIAL_COOLDOWN_MS = 180_000L // 3 minutes
-    private const val DOWNLOAD_AD_PASS_WINDOW_MS = 15 * 60 * 1000L // 15 min pass after Direct Link
+    private const val DOWNLOAD_AD_PASS_WINDOW_MS = 8 * 60 * 1000L // 8 min pass after Download Direct Link
+    private const val STREAM_AD_PASS_WINDOW_MS = 10 * 60 * 1000L // 10 min pass after Watch Now Direct Link
+    private const val MIN_DIRECT_LINK_GAP_MS = 2 * 60 * 1000L // Never stack Watch + Download direct links within 2 min
+    private const val SPONSOR_TASK_COOLDOWN_MS = 10 * 60 * 1000L // 10 min cooldown for Coin Center sponsor offer
 
     var currentNetwork = AdNetwork.STARTIO
     var startioAppId = ""
@@ -530,10 +536,20 @@ object AdManager {
             ?: normalizeHttpUrl(directLinkUrl)
     }
 
+    fun getStreamDirectLinkUrl(): String? {
+        return normalizeHttpUrl(verificationAdUrl1)
+            ?: normalizeHttpUrl(verificationAdUrl2)
+            ?: normalizeHttpUrl(directLinkUrl)
+    }
+
     fun getRewardedDirectLinkUrl(): String? {
         return normalizeHttpUrl(directLinkUrl)
             ?: normalizeHttpUrl(downloadAdUrl1)
             ?: normalizeHttpUrl(verificationAdUrl1)
+    }
+
+    fun hasDirectLinkConfigured(): Boolean {
+        return isDirectLinkAdsEnabled && getRewardedDirectLinkUrl() != null
     }
 
     /**
@@ -561,11 +577,54 @@ object AdManager {
     }
 
     private fun getDownloadPassWindowMs(): Long {
-        // Higher configured frequency = shorter pass cooldown (capped safely between 5 and 15 mins)
         return when {
-            adFrequencySession >= 5 -> 5 * 60 * 1000L
-            adFrequencySession >= 2 -> 10 * 60 * 1000L
+            adFrequencySession >= 5 -> 3 * 60 * 1000L
+            adFrequencySession >= 2 -> 5 * 60 * 1000L
             else -> DOWNLOAD_AD_PASS_WINDOW_MS
+        }
+    }
+
+    private fun getStreamPassWindowMs(): Long {
+        return when {
+            adFrequencySession >= 5 -> 4 * 60 * 1000L
+            adFrequencySession >= 2 -> 6 * 60 * 1000L
+            else -> STREAM_AD_PASS_WINDOW_MS
+        }
+    }
+
+    /**
+     * Frequency-capped Adsterra Direct Link gate when user taps "Watch Now" or an Episode "Watch" button.
+     * Navigates to the player underneath so the video loads immediately while Chrome Custom Tab is open on top.
+     */
+    fun runWithStreamAdGate(context: Context, onProceedToWatch: () -> Unit) {
+        onProceedToWatch()
+        if (isUserPremium()) return
+
+        val streamUrl = getStreamDirectLinkUrl() ?: return
+        val gateEnabled = isStreamVerificationEnabled || isDirectLinkAdsEnabled
+        if (!gateEnabled) return
+
+        val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastStreamMs = prefs.getLong(KEY_LAST_STREAM_AD_MS, 0L)
+        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
+        if (now - lastStreamMs < getStreamPassWindowMs() || now - lastAnyMs < MIN_DIRECT_LINK_GAP_MS) {
+            return
+        }
+
+        prefs.edit()
+            .putLong(KEY_LAST_STREAM_AD_MS, now)
+            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
+            .apply()
+
+        mainHandler.post {
+            if (openExternalDirectLink(context, streamUrl)) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Loading player behind sponsor — close tab to watch",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 
@@ -586,14 +645,18 @@ object AdManager {
         }
 
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
-        val lastMs = prefs.getLong(KEY_LAST_DOWNLOAD_AD_MS, 0L)
         val now = System.currentTimeMillis()
-        if (now - lastMs < getDownloadPassWindowMs()) {
+        val lastMs = prefs.getLong(KEY_LAST_DOWNLOAD_AD_MS, 0L)
+        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
+        if (now - lastMs < getDownloadPassWindowMs() || now - lastAnyMs < MIN_DIRECT_LINK_GAP_MS) {
             onUnlocked()
             return
         }
 
-        prefs.edit().putLong(KEY_LAST_DOWNLOAD_AD_MS, now).apply()
+        prefs.edit()
+            .putLong(KEY_LAST_DOWNLOAD_AD_MS, now)
+            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
+            .apply()
         val launched = openExternalDirectLink(context, directUrl)
         if (launched) {
             android.widget.Toast.makeText(
@@ -603,6 +666,41 @@ object AdManager {
             ).show()
         }
         onUnlocked()
+    }
+
+    /**
+     * Intentional high-CTR Sponsor Bonus task for Coin Center (10-min cooldown).
+     */
+    fun triggerSponsorDirectLinkTask(
+        context: Context,
+        onRewarded: () -> Unit,
+        onUnavailableOrCooldown: (String) -> Unit
+    ) {
+        val url = getRewardedDirectLinkUrl()
+        if (!isDirectLinkAdsEnabled || url.isNullOrBlank()) {
+            onUnavailableOrCooldown("Sponsor offer is currently unavailable.")
+            return
+        }
+        val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastMs = prefs.getLong(KEY_LAST_SPONSOR_TASK_MS, 0L)
+        val remainingMs = SPONSOR_TASK_COOLDOWN_MS - (now - lastMs)
+        if (remainingMs > 0L) {
+            val mins = maxOf(1L, (remainingMs + 59_999L) / 60_000L)
+            onUnavailableOrCooldown("Sponsor bonus available again in ${mins}m.")
+            return
+        }
+        if (!openExternalDirectLink(context, url)) {
+            onUnavailableOrCooldown("Couldn't open sponsor link.")
+            return
+        }
+        prefs.edit()
+            .putLong(KEY_LAST_SPONSOR_TASK_MS, now)
+            .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, now)
+            .apply()
+        mainHandler.postDelayed({
+            onRewarded()
+        }, 3000L)
     }
 
     fun showRewardedAd(

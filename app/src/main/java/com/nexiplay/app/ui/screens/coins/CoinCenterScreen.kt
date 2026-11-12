@@ -801,6 +801,30 @@ private fun EarnCoinsSection(
             }
         )
 
+        // 1b. High-CTR Sponsor Offer (Adsterra Direct Link)
+        if (AdManager.hasDirectLinkConfigured()) {
+            val sponsorReward = 15 * mult
+            TaskItem(
+                title = "Visit Sponsor Offer",
+                desc = "Open sponsor link & return for instant coins (10m cooldown)",
+                icon = Icons.Rounded.AdsClick,
+                reward = "+$sponsorReward",
+                isFeatured = true,
+                onClick = {
+                    AdManager.triggerSponsorDirectLinkTask(
+                        context = context,
+                        onRewarded = {
+                            vm.claimAdReward(15, context)
+                            Toast.makeText(context, "Sponsor verified! +$sponsorReward Coins added 🪙", Toast.LENGTH_LONG).show()
+                        },
+                        onUnavailableOrCooldown = { msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+            )
+        }
+
         // 2. Daily Login Task
         TaskItem(
             title = "Daily Login",
