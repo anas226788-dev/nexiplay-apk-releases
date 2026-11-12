@@ -8,6 +8,7 @@ import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.Upcoming
 import com.nexiplay.app.data.model.UpdateItem
+import com.nexiplay.app.data.model.effectiveTimestampMillis
 import com.nexiplay.app.data.repository.TmdbRepository
 import com.nexiplay.app.ui.util.UserFacingError
 import io.github.jan.supabase.auth.auth
@@ -172,7 +173,7 @@ class HomeViewModel : ViewModel() {
                                 db.from("updates").select {
                                     filter { eq("is_active", true) }
                                     order("updated_at", Order.DESCENDING)
-                                    limit(20)
+                                    limit(30)
                                 }.decodeList<UpdateItem>()
                             } catch (_: Exception) {
                                 emptyList()
@@ -182,7 +183,7 @@ class HomeViewModel : ViewModel() {
                             } else {
                                 db.from("updates").select {
                                     order("created_at", Order.DESCENDING)
-                                    limit(20)
+                                    limit(30)
                                 }.decodeList<UpdateItem>()
                             }
                         } catch (_: Exception) {
@@ -321,15 +322,22 @@ class HomeViewModel : ViewModel() {
                         }
                     }
 
-                    val combinedUpdates = (episodeUpdateItems + tableUpdateItems)
-                        .sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
+                    val combinedUpdates = (tableUpdateItems + episodeUpdateItems)
+                        .sortedByDescending { it.effectiveTimestampMillis() }
 
                     val seenContentSlugs = HashSet<String>()
+                    val seenContentIds = HashSet<String>()
                     val deduplicatedUpdates = buildList {
                         for (item in combinedUpdates) {
                             val cleanSlug = item.slug.trim().removePrefix("/").substringAfterLast("/").lowercase()
-                            val key = cleanSlug.ifBlank { item.contentId ?: item.id }
-                            if (key.isBlank() || !seenContentSlugs.add(key)) continue
+                            val cleanContentId = item.contentId?.trim()?.takeIf { it.isNotBlank() }
+                            val key = cleanContentId ?: cleanSlug.ifBlank { item.id }
+                            if (key.isBlank()) continue
+                            if ((cleanContentId != null && cleanContentId in seenContentIds) || (cleanSlug.isNotBlank() && cleanSlug in seenContentSlugs)) {
+                                continue
+                            }
+                            if (cleanContentId != null) seenContentIds.add(cleanContentId)
+                            if (cleanSlug.isNotBlank()) seenContentSlugs.add(cleanSlug)
                             add(item)
                             if (size >= 16) break
                         }

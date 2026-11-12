@@ -13,6 +13,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import java.time.Instant
+import java.time.OffsetDateTime
 
 /**
  * Tolerant Boolean decoder: accepts true/false, "true"/"false", 1/0, "yes"/"no".
@@ -219,6 +221,20 @@ data class UpdateItem(
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
 )
+
+fun UpdateItem.effectiveTimestampMillis(): Long {
+    val value = (updatedAt ?: createdAt)?.trim().orEmpty()
+    if (value.isBlank()) return 0L
+    return try {
+        Instant.parse(value).toEpochMilli()
+    } catch (_: Exception) {
+        try {
+            OffsetDateTime.parse(value).toInstant().toEpochMilli()
+        } catch (_: Exception) {
+            0L
+        }
+    }
+}
 
 @Serializable
 data class RecentEpisodeMovieInfo(

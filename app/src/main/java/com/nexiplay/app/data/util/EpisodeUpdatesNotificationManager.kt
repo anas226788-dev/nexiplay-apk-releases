@@ -18,6 +18,7 @@ import com.nexiplay.app.data.model.Movie
 import com.nexiplay.app.data.model.Notice
 import com.nexiplay.app.data.model.RecentEpisodeRow
 import com.nexiplay.app.data.model.UpdateItem
+import com.nexiplay.app.data.model.effectiveTimestampMillis
 import com.nexiplay.app.data.models.Notification
 import com.nexiplay.app.ui.navigation.NotificationRouter
 import com.onesignal.OneSignal
@@ -376,8 +377,8 @@ object EpisodeUpdatesNotificationManager {
                 }
 
                 val episodeUpdates = recentEpisodesDef.await().mapNotNull { it.toUpdateItem() }
-                val mergedUpdates = (episodeUpdates + updatesDef.await())
-                    .sortedByDescending { (it.updatedAt ?: it.createdAt).orEmpty() }
+                val mergedUpdates = (updatesDef.await() + episodeUpdates)
+                    .sortedByDescending { it.effectiveTimestampMillis() }
                     .distinctBy { buildUpdateTrackingKey(it) }
 
                 processUpdateAndRunningCatalog(
