@@ -53,11 +53,15 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nexiplay.app.data.util.ImgBBUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 @Composable
@@ -71,11 +75,23 @@ fun ProfileScreen(navController: NavController) {
     var isLeaderboardEnabled by remember { mutableStateOf(true) }
     var watchlistCount by remember { mutableIntStateOf(0) }
     var streamedCount by remember { mutableIntStateOf(0) }
-    var totalWatchSeconds by remember { mutableIntStateOf(0) }
 
     val badgeTick by com.nexiplay.app.data.util.AdManager.badgeUpdateTick.collectAsState()
+    val activityTick by com.nexiplay.app.data.util.AdManager.activityUpdateTick.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit, badgeTick) {
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                resumeTick++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(Unit, badgeTick, activityTick, resumeTick) {
         // Check leaderboard toggle in app_settings
         try {
             val json = SupabaseClient.main.from("app_settings")
@@ -132,7 +148,7 @@ fun ProfileScreen(navController: NavController) {
                 e.printStackTrace()
             }
 
-            // Load Website Account Activity Hub Stats (My List + Streamed + Watch Time)
+            // Load User Activity Hub Stats (My List + Streamed — watch time stays admin-only)
             try {
                 val webList = try {
                     SupabaseClient.main.from("user_watchlist")
@@ -151,18 +167,28 @@ fun ProfileScreen(navController: NavController) {
 
             try {
                 val watchEvents = SupabaseClient.main.from("user_events")
-                    .select(Columns.list("movie_id", "duration_seconds")) {
+                    .select(Columns.list("id", "movie_id", "content_title", "metadata")) {
                         filter {
                             eq("user_id", user.id)
                             eq("event_type", "watch")
+                            eq("deleted_by_user", false)
                         }
                     }
                     .decodeList<kotlinx.serialization.json.JsonObject>()
-                streamedCount = watchEvents.mapNotNull { it["movie_id"]?.jsonPrimitive?.contentOrNull }.distinct().size
-                totalWatchSeconds = watchEvents.sumOf {
-                    it["duration_seconds"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-                }
+                streamedCount = watchEvents.mapNotNull { row ->
+                    val movieId = row["movie_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val metaSlug = try {
+                        row["metadata"]?.jsonObject?.get("slug")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    } catch (_: Exception) { null }
+                    val title = row["content_title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val rowId = row["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    movieId ?: metaSlug ?: title ?: rowId
+                }.distinct().size
             } catch (_: Exception) {}
+        } else {
+            profile = null
+            watchlistCount = 0
+            streamedCount = 0
         }
         loading = false
     }
@@ -350,11 +376,7 @@ fun ProfileScreen(navController: NavController) {
                             isUploading = isUploading
                         )
 
-                        // ── Website Activity Hub Stats Overview (My List / Streamed / Watch Time) ──
-                        val hours = totalWatchSeconds / 3600
-                        val mins = (totalWatchSeconds % 3600) / 60
-                        val watchTimeStr = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
-
+                        // ── Activity Hub Stats Overview (My List / Streamed — Watch Time is Admin-only) ──
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -362,16 +384,17 @@ fun ProfileScreen(navController: NavController) {
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             listOf(
-                                Triple("My List", "$watchlistCount", Color(0xFFE50914)),
-                                Triple("Streamed", "$streamedCount", Color(0xFF10B981)),
-                                Triple("Watch Time", watchTimeStr, Color(0xFFF59E0B))
-                            ).forEach { (label, value, accent) ->
+                                Triple("My List", "$watchlistCount", Color(0xFFE50914) to Screen.Watchlist.route),
+                                Triple("Streamed", "$streamedCount", Color(0xFF10B981) to "history")
+                            ).forEach { (label, value, accentAndRoute) ->
+                                val (accent, targetRoute) = accentAndRoute
                                 Column(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(themeCard())
                                         .border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                                        .bounceClick { navController.navigate(targetRoute) }
                                         .padding(vertical = 12.dp, horizontal = 8.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {

@@ -121,8 +121,8 @@ class DetailViewModel : ViewModel() {
             } else null
         } ?: return false
 
-        val inUserWl = try {
-            SupabaseClient.main.from("user_watchlist")
+        val inAppWl = try {
+            SupabaseClient.main.from("watchlist")
                 .select(Columns.list("movie_id")) {
                     filter {
                         eq("user_id", user.id)
@@ -134,10 +134,10 @@ class DetailViewModel : ViewModel() {
         } catch (_: Exception) {
             false
         }
-        if (inUserWl) return true
+        if (inAppWl) return true
 
         return try {
-            SupabaseClient.main.from("watchlist")
+            SupabaseClient.main.from("user_watchlist")
                 .select(Columns.list("movie_id")) {
                     filter {
                         eq("user_id", user.id)
@@ -627,11 +627,30 @@ class DetailViewModel : ViewModel() {
                                 put("is_adult", currentMovie.isAdult == true)
                             }
 
-                            val insertedMovie = SupabaseClient.main.from("movies")
-                                .insert(moviePayload) {
-                                    select()
-                                }
-                                .decodeSingle<Movie>()
+                            val insertedMovie = try {
+                                val existingBySlug = SupabaseClient.main.from("movies")
+                                    .select {
+                                        filter { eq("slug", safeSlug) }
+                                        limit(1)
+                                    }
+                                    .decodeList<Movie>()
+                                    .firstOrNull()
+                                existingBySlug ?: SupabaseClient.main.from("movies")
+                                    .insert(moviePayload) {
+                                        select()
+                                    }
+                                    .decodeSingle<Movie>()
+                            } catch (insertEx: Exception) {
+                                // Fallback if slug raced/collided with an existing DB entry
+                                SupabaseClient.main.from("movies")
+                                    .select {
+                                        filter { eq("slug", safeSlug) }
+                                        limit(1)
+                                    }
+                                    .decodeList<Movie>()
+                                    .firstOrNull()
+                                    ?: throw insertEx
+                            }
 
                             _state.value = _state.value.copy(movie = insertedMovie)
                             insertedMovie.id
@@ -644,9 +663,13 @@ class DetailViewModel : ViewModel() {
                             put("movie_id", resolvedMovieId)
                         }
                         try {
-                            SupabaseClient.main.from("user_watchlist").insert(payload)
-                        } catch (_: Exception) {
                             SupabaseClient.main.from("watchlist").insert(payload)
+                        } catch (watchlistErr: Exception) {
+                            try {
+                                SupabaseClient.main.from("user_watchlist").insert(payload)
+                            } catch (_: Exception) {
+                                throw watchlistErr
+                            }
                         }
                     } else {
                         try {
@@ -667,6 +690,7 @@ class DetailViewModel : ViewModel() {
                         } catch (_: Exception) {}
                     }
                 }
+                com.nexiplay.app.data.util.AdManager.notifyActivityUpdated()
                 detailCache[cacheKey(currentMovie.slug)] = _state.value.copy(isInWatchlist = targetState, watchlistBusy = false)
                 context?.let {
                     Toast.makeText(

@@ -144,6 +144,12 @@ object AdManager {
     val directLinkOverlay: StateFlow<DirectLinkOverlaySession?> = _directLinkOverlay.asStateFlow()
     private val _badgeUpdateTick = MutableStateFlow(0L)
     val badgeUpdateTick: StateFlow<Long> = _badgeUpdateTick.asStateFlow()
+    private val _activityUpdateTick = MutableStateFlow(0L)
+    val activityUpdateTick: StateFlow<Long> = _activityUpdateTick.asStateFlow()
+
+    fun notifyActivityUpdated() {
+        _activityUpdateTick.value = System.currentTimeMillis()
+    }
 
     /**
      * Register activity for deferred ad SDK initialization (executed post-splash so launch is instant).

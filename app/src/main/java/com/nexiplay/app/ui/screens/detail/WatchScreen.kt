@@ -90,12 +90,15 @@ import com.nexiplay.app.data.model.EventMetadata
 import com.nexiplay.app.data.model.UserEvent
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.query.Columns
 import com.nexiplay.app.data.SupabaseClient
 import java.util.UUID
 import com.nexiplay.app.ui.theme.themeBg
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.GlobalScope
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import com.nexiplay.app.ui.theme.themeCard
 import com.nexiplay.app.ui.theme.themeTextPrimary
@@ -1128,11 +1131,38 @@ fun WatchScreen(
                         type = movie.type,
                         source = "android_app"
                     )
+                    val resolvedMovieId: String? = if (DetailViewModel.isUuid(movie.id)) {
+                        movie.id
+                    } else {
+                        val candidateTmdbId = movie.tmdbId?.takeIf { it.isNotBlank() }
+                            ?: if (movie.slug.startsWith("tmdb-")) movie.slug.removePrefix("tmdb-").trim() else null
+                        val byTmdb = if (!candidateTmdbId.isNullOrBlank()) {
+                            try {
+                                SupabaseClient.main.from("movies")
+                                    .select(Columns.list("id")) {
+                                        filter { eq("tmdb_id", candidateTmdbId) }
+                                        limit(1)
+                                    }
+                                    .decodeList<kotlinx.serialization.json.JsonObject>()
+                                    .firstOrNull()?.get("id")?.jsonPrimitive?.contentOrNull
+                            } catch (_: Exception) { null }
+                        } else null
+                        byTmdb ?: try {
+                            SupabaseClient.main.from("movies")
+                                .select(Columns.list("id")) {
+                                    filter { eq("slug", movie.slug) }
+                                    limit(1)
+                                }
+                                .decodeList<kotlinx.serialization.json.JsonObject>()
+                                .firstOrNull()?.get("id")?.jsonPrimitive?.contentOrNull
+                        } catch (_: Exception) { null }
+                    }
+                    val safeEpisodeId = selectedEpisode?.id?.takeIf { DetailViewModel.isUuid(it) }
                     val event = UserEvent(
                         userId = user.id,
                         eventType = "watch",
-                        movieId = movie.id,
-                        episodeId = selectedEpisode?.id,
+                        movieId = resolvedMovieId,
+                        episodeId = safeEpisodeId,
                         contentType = movie.type,
                         contentTitle = movie.title,
                         seasonNumber = seasonNum,
@@ -1143,6 +1173,7 @@ fun WatchScreen(
                         select()
                     }.decodeSingle<UserEvent>()
                     eventId = inserted.id
+                    com.nexiplay.app.data.util.AdManager.notifyActivityUpdated()
 
                     // Record watch for daily coin rewards
                     // Watch coin reward already recorded above

@@ -387,7 +387,7 @@ data class UserEvent(
     val id: String? = null,
     @SerialName("user_id") val userId: String,
     @SerialName("event_type") val eventType: String,
-    @SerialName("movie_id") val movieId: String,
+    @SerialName("movie_id") val movieId: String? = null,
     @SerialName("episode_id") val episodeId: String? = null,
     @SerialName("content_type") val contentType: String? = null,
     @SerialName("content_title") val contentTitle: String? = null,

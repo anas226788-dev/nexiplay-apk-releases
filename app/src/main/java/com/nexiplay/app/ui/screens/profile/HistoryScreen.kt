@@ -20,6 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
 import com.nexiplay.app.data.SupabaseClient
@@ -40,6 +43,19 @@ fun HistoryScreen(navController: NavController) {
     var loading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val activityTick by com.nexiplay.app.data.util.AdManager.activityUpdateTick.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                resumeTick++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun fetchHistory() {
         val user = SupabaseClient.main.auth.currentUserOrNull()
@@ -79,13 +95,14 @@ fun HistoryScreen(navController: NavController) {
                 SupabaseClient.main.from("user_events")
                     .update(updateJson) { filter { eq("id", id) } }
                 history = history.filter { it.id != id }
+                com.nexiplay.app.data.util.AdManager.notifyActivityUpdated()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(Unit, activityTick, resumeTick) {
         fetchHistory()
     }
 

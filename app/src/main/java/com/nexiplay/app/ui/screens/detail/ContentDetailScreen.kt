@@ -3372,8 +3372,8 @@ private fun trackDownload(
             val event = UserEvent(
                 userId = user.id,
                 eventType = "download",
-                movieId = movie.id,
-                episodeId = episodeId,
+                movieId = movie.id.takeIf { DetailViewModel.isUuid(it) },
+                episodeId = episodeId?.takeIf { DetailViewModel.isUuid(it) },
                 contentType = movie.type,
                 contentTitle = movie.title,
                 seasonNumber = seasonNumber,
