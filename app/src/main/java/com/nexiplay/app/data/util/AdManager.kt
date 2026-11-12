@@ -1233,36 +1233,68 @@ object AdManager {
         }
 
         val finished = AtomicBoolean(false)
+        val adWasDisplayed = AtomicBoolean(false)
+        val markDisplayed = {
+            adWasDisplayed.set(true)
+        }
         val wrappedOnClosed = {
             if (finished.compareAndSet(false, true)) {
                 mainHandler.post {
                     onClosed()
-                    checkAndTriggerUpsellPopup()
+                    if (adWasDisplayed.get()) {
+                        checkAndTriggerUpsellPopup()
+                    }
                 }
             }
         }
 
         when (currentNetwork) {
-            AdNetwork.STARTIO -> loadAndShowStartIoInterstitial(activity, wrappedOnClosed, waitForColdLoad = waitForColdLoad)
+            AdNetwork.STARTIO -> loadAndShowStartIoInterstitial(
+                activity = activity,
+                onClosed = wrappedOnClosed,
+                onDisplayed = markDisplayed,
+                waitForColdLoad = waitForColdLoad
+            )
             AdNetwork.UNITY -> {
-                loadAndShowUnityInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
-                    if (startioAppId.isNotEmpty()) {
-                        loadAndShowStartIoInterstitial(activity, wrappedOnClosed, waitForColdLoad = waitForColdLoad)
-                    } else {
-                        wrappedOnClosed()
+                loadAndShowUnityInterstitial(
+                    activity = activity,
+                    onClosed = wrappedOnClosed,
+                    onDisplayed = markDisplayed,
+                    onFailed = {
+                        if (startioAppId.isNotEmpty()) {
+                            loadAndShowStartIoInterstitial(
+                                activity = activity,
+                                onClosed = wrappedOnClosed,
+                                onDisplayed = markDisplayed,
+                                waitForColdLoad = waitForColdLoad
+                            )
+                        } else {
+                            wrappedOnClosed()
+                        }
                     }
-                })
+                )
             }
             AdNetwork.BOTH -> {
-                loadAndShowStartIoInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
-                    if (unityAppKey.isNotEmpty()) {
-                        loadAndShowUnityInterstitial(activity, onClosed = wrappedOnClosed, onFailed = {
+                loadAndShowStartIoInterstitial(
+                    activity = activity,
+                    onClosed = wrappedOnClosed,
+                    onDisplayed = markDisplayed,
+                    onFailed = {
+                        if (unityAppKey.isNotEmpty()) {
+                            loadAndShowUnityInterstitial(
+                                activity = activity,
+                                onClosed = wrappedOnClosed,
+                                onDisplayed = markDisplayed,
+                                onFailed = {
+                                    wrappedOnClosed()
+                                }
+                            )
+                        } else {
                             wrappedOnClosed()
-                        })
-                    } else {
-                        wrappedOnClosed()
-                    }
-                }, waitForColdLoad = waitForColdLoad)
+                        }
+                    },
+                    waitForColdLoad = waitForColdLoad
+                )
             }
         }
     }
@@ -1270,7 +1302,8 @@ object AdManager {
     private fun loadAndShowUnityInterstitial(
         activity: Activity,
         onClosed: () -> Unit,
-        onFailed: (() -> Unit)? = null
+        onFailed: (() -> Unit)? = null,
+        onDisplayed: (() -> Unit)? = null
     ) {
         if (unityAppKey.isEmpty()) {
             onFailed?.invoke() ?: onClosed()
@@ -1305,6 +1338,7 @@ object AdManager {
             }
             override fun onAdOpened(adInfo: AdInfo?) {
                 lastInterstitialShownAtMs = System.currentTimeMillis()
+                onDisplayed?.invoke()
                 mainHandler.removeCallbacks(timeoutRunnable)
             }
             override fun onAdShowSucceeded(adInfo: AdInfo?) {}
@@ -1331,6 +1365,7 @@ object AdManager {
         activity: Activity,
         onClosed: () -> Unit,
         onFailed: (() -> Unit)? = null,
+        onDisplayed: (() -> Unit)? = null,
         waitForColdLoad: Boolean = true
     ) {
         if (startioAppId.isEmpty() || activity.isFinishing || activity.isDestroyed) {
@@ -1358,6 +1393,7 @@ object AdManager {
                 override fun adHidden(p0: com.startapp.sdk.adsbase.Ad?) { finishClose() }
                 override fun adDisplayed(p0: com.startapp.sdk.adsbase.Ad?) {
                     lastInterstitialShownAtMs = System.currentTimeMillis()
+                    onDisplayed?.invoke()
                 }
                 override fun adClicked(p0: com.startapp.sdk.adsbase.Ad?) {}
                 override fun adNotDisplayed(p0: com.startapp.sdk.adsbase.Ad?) { finishFail() }
