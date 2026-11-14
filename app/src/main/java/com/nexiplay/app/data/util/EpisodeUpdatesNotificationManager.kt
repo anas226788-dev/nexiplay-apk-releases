@@ -80,12 +80,39 @@ object EpisodeUpdatesNotificationManager {
      * Registers OneSignal lifecycle & click listeners at Application startup so cold-start
      * notification taps and foreground deliveries always route cleanly even before Activity creation.
      */
+    fun syncOneSignalSubscriptionState() {
+        runCatching {
+            if (!OneSignal.isInitialized) return
+            val hasPermission = OneSignal.Notifications.permission
+            val pushSubscription = OneSignal.User.pushSubscription
+            android.util.Log.d(
+                "NexiPushSync",
+                "OneSignal sync: permission=$hasPermission, optedIn=${pushSubscription.optedIn}, id=${pushSubscription.id}, hasToken=${!pushSubscription.token.isNullOrBlank()}"
+            )
+            if (hasPermission && !pushSubscription.optedIn) {
+                pushSubscription.optIn()
+                android.util.Log.d("NexiPushSync", "Called OneSignal.User.pushSubscription.optIn()")
+            }
+        }.onFailure { err ->
+            android.util.Log.w("NexiPushSync", "syncOneSignalSubscriptionState failed: ${err.message}")
+        }
+    }
+
     fun attachOneSignalHandlers(context: Context) {
         if (!oneSignalHandlersAttached.compareAndSet(false, true)) return
         val appContext = context.applicationContext
         initChannel(appContext)
 
         runCatching {
+            OneSignal.Notifications.addPermissionObserver(object : com.onesignal.notifications.IPermissionObserver {
+                override fun onNotificationPermissionChange(permission: Boolean) {
+                    android.util.Log.d("NexiPushSync", "OneSignal permission changed: $permission")
+                    if (permission) {
+                        syncOneSignalSubscriptionState()
+                    }
+                }
+            })
+
             OneSignal.Notifications.addForegroundLifecycleListener(object : INotificationLifecycleListener {
                 override fun onWillDisplay(event: INotificationWillDisplayEvent) {
                     initChannel(appContext)
@@ -114,6 +141,7 @@ object EpisodeUpdatesNotificationManager {
                     )
                 }
             })
+            syncOneSignalSubscriptionState()
         }
     }
 

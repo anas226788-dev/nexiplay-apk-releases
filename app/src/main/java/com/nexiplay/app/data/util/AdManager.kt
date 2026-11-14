@@ -94,13 +94,11 @@ object AdManager {
     private const val KEY_LAST_EPISODE_AD_MS = "last_episode_direct_link_ms"
     private const val KEY_LAST_NOVEL_AD_MS = "last_novel_direct_link_ms"
     private const val KEY_LAST_SPONSOR_TASK_MS = "last_sponsor_task_direct_link_ms"
-    private const val KEY_LAST_ANY_DIRECT_LINK_MS = "last_any_direct_link_ms"
-    private const val DOWNLOAD_AD_PASS_WINDOW_MS = 8 * 60 * 1000L // 8 min pass after Download Direct Link
-    private const val STREAM_AD_PASS_WINDOW_MS = 10 * 60 * 1000L // 10 min pass after Watch Now Direct Link
-    private const val NOVEL_AD_PASS_WINDOW_MS = 5 * 60 * 1000L // 5 min pass window for Novel chapters
-    private const val EPISODE_AD_COOLDOWN_MS = 30 * 1000L // 30s anti-spam cooldown when switching episodes
-    private const val MIN_DIRECT_LINK_GAP_MS = 2 * 60 * 1000L // Never stack Watch + Download direct links within 2 min
-    private const val SPONSOR_TASK_COOLDOWN_MS = 10 * 60 * 1000L // 10 min cooldown for Coin Center sponsor offer
+    private const val DOWNLOAD_AD_PASS_WINDOW_MS = 90 * 1000L // 90s default cooldown per download gate
+    private const val STREAM_AD_PASS_WINDOW_MS = 2 * 60 * 1000L // 2 min cooldown per stream gate
+    private const val NOVEL_AD_PASS_WINDOW_MS = 60 * 1000L // 60s cooldown per novel chapter gate
+    private const val EPISODE_AD_COOLDOWN_MS = 10 * 1000L // 10s anti-double-tap guard when switching episodes
+    private const val SPONSOR_TASK_COOLDOWN_MS = 5 * 60 * 1000L // 5 min cooldown for Coin Center bonus task
 
     var currentNetwork = AdNetwork.STARTIO
     var startioAppId = ""
@@ -146,6 +144,13 @@ object AdManager {
     @Volatile private var isStartIoInterstitialReady = false
     @Volatile private var isStartIoInterstitialLoading = false
     private var lastStartIoPreloadFailMs = 0L
+    private var startIoPreloadRetryCount = 0
+    private var startIoPreloadRetryRunnable: Runnable? = null
+    private val isConfigLoading = AtomicBoolean(false)
+    private val streamRotationIndex = java.util.concurrent.atomic.AtomicInteger(0)
+    private val downloadRotationIndex = java.util.concurrent.atomic.AtomicInteger(0)
+    private val novelRotationIndex = java.util.concurrent.atomic.AtomicInteger(0)
+    private val rewardedRotationIndex = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile var isConfigLoaded = false
     @Volatile private var isStartupReadyForAds = false
     private var pendingActivity: java.lang.ref.WeakReference<Activity>? = null
@@ -185,12 +190,16 @@ object AdManager {
         }
     }
 
+    private fun hasValidUnityLevelPlayKey(): Boolean {
+        return unityAppKey.isNotBlank() && !unityAppKey.all { it.isDigit() }
+    }
+
     private fun initializeConfiguredAdSdks(activity: Activity) {
         if (startioAppId.isNotEmpty() && !isStartIoInitialized) {
             initStartIo(activity.applicationContext, startioAppId)
         }
-        // Only init IronSource if Unity is active/waterfall and key looks like an IronSource key (not empty)
-        if (currentNetwork != AdNetwork.STARTIO && unityAppKey.isNotEmpty() && !isUnityInitialized) {
+        // Only init IronSource if Unity is active/waterfall and key looks like an IronSource key
+        if (currentNetwork != AdNetwork.STARTIO && hasValidUnityLevelPlayKey() && !isUnityInitialized) {
             initUnityLevelPlay(activity, unityAppKey)
         }
     }
@@ -434,14 +443,21 @@ object AdManager {
             isStartIoInitialized = true
             try {
                 val appCtx = context.applicationContext
-                StartAppSDK.init(appCtx, cleanId, false)
-                StartAppSDK.enableReturnAds(false)
+                // Configure test flag & PAS consent BEFORE initParams so initial ad/metadata calls honor them
                 StartAppSDK.setTestAdsEnabled(isTestAdsEnabled)
-                if (!isAppOpenEnabled) {
-                    StartAppAd.disableSplash()
-                }
+                StartAppSDK.setUserConsent(appCtx, "pas", System.currentTimeMillis(), true)
+                StartAppSDK.initParams(appCtx, cleanId)
+                    .setReturnAdsEnabled(false)
+                    .setCallback {
+                        mainHandler.post {
+                            if (!isAppOpenEnabled) {
+                                runCatching { StartAppAd.disableSplash() }
+                            }
+                            preloadStartIoInterstitial(appCtx, force = true)
+                        }
+                    }
+                    .init()
                 android.util.Log.d("AdManager", "✅ Start.io initialized with appId=$cleanId, testAds=$isTestAdsEnabled")
-                preloadStartIoInterstitial(appCtx)
             } catch (e: Exception) {
                 isStartIoInitialized = false
                 android.util.Log.e("AdManager", "❌ Start.io init failed", e)
@@ -457,10 +473,12 @@ object AdManager {
         val now = System.currentTimeMillis()
         if (!force && now - lastStartIoPreloadFailMs < 15_000L) return
 
+        val appCtx = context.applicationContext
         val hostContext = pendingActivity?.get()?.takeIf { !it.isFinishing && !it.isDestroyed }
-            ?: context.applicationContext
+            ?: appCtx
         isStartIoInterstitialLoading = true
         mainHandler.post {
+            startIoPreloadRetryRunnable?.let { mainHandler.removeCallbacks(it) }
             try {
                 val ad = StartAppAd(hostContext)
                 ad.loadAd(StartAppAd.AdMode.AUTOMATIC, object : AdEventListener {
@@ -468,6 +486,7 @@ object AdManager {
                         preloadedStartIoInterstitial = ad
                         isStartIoInterstitialReady = true
                         isStartIoInterstitialLoading = false
+                        startIoPreloadRetryCount = 0
                         android.util.Log.d("AdManager", "✅ Start.io interstitial preloaded & ready")
                     }
                     override fun onFailedToReceiveAd(failed: com.startapp.sdk.adsbase.Ad?) {
@@ -476,6 +495,19 @@ object AdManager {
                         isStartIoInterstitialLoading = false
                         lastStartIoPreloadFailMs = System.currentTimeMillis()
                         android.util.Log.w("AdManager", "⚠️ Start.io interstitial preload no-fill: ${failed?.errorMessage}")
+                        if (startIoPreloadRetryCount < 3 && pendingActivity?.get()?.isFinishing == false) {
+                            val retryDelayMs = when (startIoPreloadRetryCount) {
+                                0 -> 18_000L
+                                1 -> 35_000L
+                                else -> 60_000L
+                            }
+                            startIoPreloadRetryCount++
+                            val runnable = Runnable {
+                                preloadStartIoInterstitial(appCtx, force = true)
+                            }
+                            startIoPreloadRetryRunnable = runnable
+                            mainHandler.postDelayed(runnable, retryDelayMs)
+                        }
                     }
                 })
             } catch (e: Exception) {
@@ -487,7 +519,7 @@ object AdManager {
 
     fun initUnityLevelPlay(activity: Activity, appKey: String) {
         val cleanKey = appKey.trim()
-        if (cleanKey.isNotEmpty() && !isUnityInitialized) {
+        if (cleanKey.isNotEmpty() && !cleanKey.all { it.isDigit() } && !isUnityInitialized) {
             try {
                 android.util.Log.d("AdManager", "🔵 Initializing Unity LevelPlay with appKey=$cleanKey")
                 IronSource.init(
@@ -507,12 +539,32 @@ object AdManager {
         }
     }
 
+    suspend fun ensureConfigLoaded(supabase: SupabaseClient) {
+        if (!isConfigLoaded) {
+            loadConfig(supabase)
+        }
+    }
+
     suspend fun loadConfig(supabase: SupabaseClient) {
+        if (!isConfigLoading.compareAndSet(false, true)) return
         try {
             withContext(Dispatchers.IO) {
-                val settings = supabase.postgrest["app_settings"]
-                    .select()
-                    .decodeSingleOrNull<AdSettings>()
+                val backoffMs = longArrayOf(0L, 2_000L, 5_000L)
+                var settings: AdSettings? = null
+                for (delayMs in backoffMs) {
+                    if (delayMs > 0L) kotlinx.coroutines.delay(delayMs)
+                    val attempt = runCatching {
+                        supabase.postgrest["app_settings"]
+                            .select()
+                            .decodeSingleOrNull<AdSettings>()
+                    }
+                    if (attempt.isSuccess) {
+                        settings = attempt.getOrNull()
+                        if (settings != null) break
+                    } else {
+                        android.util.Log.w("AdManager", "⚠️ loadConfig attempt failed: ${attempt.exceptionOrNull()?.message}")
+                    }
+                }
 
                 settings?.let {
                     if (!it.startioAppId.isNullOrBlank()) startioAppId = it.startioAppId.trim()
@@ -524,8 +576,7 @@ object AdManager {
                     currentNetwork = when (it.adNetwork?.trim()?.uppercase()) {
                         "STARTIO" -> AdNetwork.STARTIO
                         "UNITY" -> {
-                            val isRawNumericGameId = unityAppKey.isNotBlank() && unityAppKey.all { ch -> ch.isDigit() }
-                            if ((unityAppKey.isBlank() || isRawNumericGameId) && startioAppId.isNotBlank()) {
+                            if (!hasValidUnityLevelPlayKey() && startioAppId.isNotBlank()) {
                                 AdNetwork.STARTIO
                             } else {
                                 AdNetwork.UNITY
@@ -541,6 +592,7 @@ object AdManager {
                     isNativeEnabled = it.isNativeEnabled ?: false
                     isAppOpenEnabled = it.isAppOpenEnabled ?: false
                     isPremiumServerAdEnabled = it.isPremiumServerAdEnabled ?: true
+                    val prevTestMode = isTestAdsEnabled
                     isTestAdsEnabled = it.isTestAdsEnabled ?: false
 
                     // Adsterra Direct Link config
@@ -569,10 +621,17 @@ object AdManager {
                     appEnabledServers = it.appEnabledServers
 
                     if (isStartIoInitialized) {
-                        try { StartAppSDK.setTestAdsEnabled(isTestAdsEnabled) } catch (_: Exception) {}
+                        runCatching { StartAppSDK.setTestAdsEnabled(isTestAdsEnabled) }
+                        if (prevTestMode != isTestAdsEnabled) {
+                            lastStartIoPreloadFailMs = 0L
+                            startIoPreloadRetryCount = 0
+                            pendingActivity?.get()?.let { act ->
+                                preloadStartIoInterstitial(act.applicationContext, force = true)
+                            }
+                        }
                     }
                     if (!isAppOpenEnabled) {
-                        try { StartAppAd.disableSplash() } catch (_: Exception) {}
+                        runCatching { StartAppAd.disableSplash() }
                     }
 
                     isConfigLoaded = true
@@ -591,6 +650,8 @@ object AdManager {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        } finally {
+            isConfigLoading.set(false)
         }
     }
 
@@ -612,42 +673,31 @@ object AdManager {
         }
     }
 
-    private fun normalizeHttpUrl(raw: String?): String? {
-        val trimmed = raw?.trim().orEmpty()
-        if (trimmed.isBlank()) return null
-        return if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
-            trimmed
-        } else {
-            null
-        }
-    }
+    private fun normalizeHttpUrl(raw: String?): String? = DirectLinkHelper.normalizeHttpUrl(raw)
 
     fun getDownloadDirectLinkUrl(): String? {
-        return normalizeHttpUrl(downloadAdUrl1)
-            ?: normalizeHttpUrl(downloadAdUrl2)
-            ?: normalizeHttpUrl(directLinkUrl)
+        val candidates = DirectLinkHelper.collectDistinctHttpUrls(downloadAdUrl1, downloadAdUrl2, directLinkUrl)
+        return DirectLinkHelper.selectRotatingUrl(candidates, downloadRotationIndex.getAndIncrement())
     }
 
     fun getStreamDirectLinkUrl(): String? {
-        return normalizeHttpUrl(verificationAdUrl1)
-            ?: normalizeHttpUrl(verificationAdUrl2)
-            ?: normalizeHttpUrl(directLinkUrl)
+        val candidates = DirectLinkHelper.collectDistinctHttpUrls(verificationAdUrl1, verificationAdUrl2, directLinkUrl)
+        return DirectLinkHelper.selectRotatingUrl(candidates, streamRotationIndex.getAndIncrement())
     }
 
     fun getNovelDirectLinkUrl(): String? {
-        return normalizeHttpUrl(novelAdUrl1)
-            ?: normalizeHttpUrl(novelAdUrl2)
-            ?: normalizeHttpUrl(directLinkUrl)
+        val candidates = DirectLinkHelper.collectDistinctHttpUrls(novelAdUrl1, novelAdUrl2, directLinkUrl)
+        return DirectLinkHelper.selectRotatingUrl(candidates, novelRotationIndex.getAndIncrement())
     }
 
     fun getRewardedDirectLinkUrl(): String? {
-        return normalizeHttpUrl(directLinkUrl)
-            ?: normalizeHttpUrl(downloadAdUrl1)
-            ?: normalizeHttpUrl(verificationAdUrl1)
+        val candidates = DirectLinkHelper.collectDistinctHttpUrls(directLinkUrl, verificationAdUrl1, downloadAdUrl1, novelAdUrl1)
+        return DirectLinkHelper.selectRotatingUrl(candidates, rewardedRotationIndex.getAndIncrement())
     }
 
     fun hasDirectLinkConfigured(): Boolean {
-        return isDirectLinkAdsEnabled && getRewardedDirectLinkUrl() != null
+        return isDirectLinkAdsEnabled &&
+            DirectLinkHelper.collectDistinctHttpUrls(directLinkUrl, verificationAdUrl1, downloadAdUrl1, novelAdUrl1).isNotEmpty()
     }
 
     /**
@@ -676,24 +726,24 @@ object AdManager {
 
     private fun getDownloadPassWindowMs(): Long {
         return when {
-            adFrequencySession >= 5 -> 3 * 60 * 1000L
-            adFrequencySession >= 2 -> 5 * 60 * 1000L
+            adFrequencySession >= 5 -> 35_000L
+            adFrequencySession >= 2 -> 60_000L
             else -> DOWNLOAD_AD_PASS_WINDOW_MS
         }
     }
 
     private fun getStreamPassWindowMs(): Long {
         return when {
-            adFrequencySession >= 5 -> 4 * 60 * 1000L
-            adFrequencySession >= 2 -> 6 * 60 * 1000L
+            adFrequencySession >= 5 -> 45_000L
+            adFrequencySession >= 2 -> 75_000L
             else -> STREAM_AD_PASS_WINDOW_MS
         }
     }
 
     private fun getNovelPassWindowMs(): Long {
         return when {
-            adFrequencySession >= 5 -> 2 * 60 * 1000L
-            adFrequencySession >= 2 -> 3 * 60 * 1000L
+            adFrequencySession >= 5 -> 25_000L
+            adFrequencySession >= 2 -> 45_000L
             else -> NOVEL_AD_PASS_WINDOW_MS
         }
     }
@@ -753,8 +803,7 @@ object AdManager {
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastStreamMs = prefs.getLong(KEY_LAST_STREAM_AD_MS, 0L)
-        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
-        if (now - lastStreamMs < getStreamPassWindowMs() || now - lastAnyMs < MIN_DIRECT_LINK_GAP_MS) {
+        if (DirectLinkHelper.shouldSkipDirectLinkGate(lastStreamMs, now, getStreamPassWindowMs())) {
             onProceedToWatch()
             return
         }
@@ -768,7 +817,6 @@ object AdManager {
                 val ts = System.currentTimeMillis()
                 prefs.edit()
                     .putLong(KEY_LAST_STREAM_AD_MS, ts)
-                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onProceedToWatch()
             }
@@ -777,7 +825,7 @@ object AdManager {
 
     /**
      * Adsterra Direct Link overlay when user advances to another episode while watching.
-     * Uses a 30s anti-double-tap cooldown and ONLY commits the episode change inside onCompleted
+     * Uses a 10s anti-double-tap cooldown and ONLY commits the episode change inside onCompleted
      * so scrapers, active streams, and current episode state stay untouched if cancelled.
      */
     fun runWithEpisodeAdGate(context: Context, onProceedToEpisode: () -> Unit): Boolean {
@@ -796,8 +844,7 @@ object AdManager {
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastEpMs = prefs.getLong(KEY_LAST_EPISODE_AD_MS, 0L)
-        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
-        if (now - lastEpMs < EPISODE_AD_COOLDOWN_MS || now - lastAnyMs < 15_000L) {
+        if (DirectLinkHelper.shouldSkipDirectLinkGate(lastEpMs, now, EPISODE_AD_COOLDOWN_MS)) {
             onProceedToEpisode()
             return false
         }
@@ -812,7 +859,6 @@ object AdManager {
                 prefs.edit()
                     .putLong(KEY_LAST_EPISODE_AD_MS, ts)
                     .putLong(KEY_LAST_STREAM_AD_MS, ts)
-                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onProceedToEpisode()
             }
@@ -842,8 +888,7 @@ object AdManager {
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastNovelMs = prefs.getLong(KEY_LAST_NOVEL_AD_MS, 0L)
-        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
-        if (now - lastNovelMs < getNovelPassWindowMs() || now - lastAnyMs < 60_000L) {
+        if (DirectLinkHelper.shouldSkipDirectLinkGate(lastNovelMs, now, getNovelPassWindowMs())) {
             onProceedToRead()
             return
         }
@@ -857,7 +902,6 @@ object AdManager {
                 val ts = System.currentTimeMillis()
                 prefs.edit()
                     .putLong(KEY_LAST_NOVEL_AD_MS, ts)
-                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onProceedToRead()
             }
@@ -883,8 +927,7 @@ object AdManager {
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastMs = prefs.getLong(KEY_LAST_DOWNLOAD_AD_MS, 0L)
-        val lastAnyMs = prefs.getLong(KEY_LAST_ANY_DIRECT_LINK_MS, 0L)
-        if (now - lastMs < getDownloadPassWindowMs() || now - lastAnyMs < MIN_DIRECT_LINK_GAP_MS) {
+        if (DirectLinkHelper.shouldSkipDirectLinkGate(lastMs, now, getDownloadPassWindowMs())) {
             onUnlocked()
             return
         }
@@ -898,7 +941,6 @@ object AdManager {
                 val ts = System.currentTimeMillis()
                 prefs.edit()
                     .putLong(KEY_LAST_DOWNLOAD_AD_MS, ts)
-                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onUnlocked()
             }
@@ -906,7 +948,7 @@ object AdManager {
     }
 
     /**
-     * Intentional Coin Center bonus explorer task (waits for page load + 15s overlay countdown + 10m cooldown).
+     * Intentional Coin Center bonus explorer task (waits for page load + 15s overlay countdown + 5m cooldown).
      * Rewards strictly when the full post-load 15s timer finishes.
      */
     fun triggerDirectLinkCoinTask(
@@ -922,8 +964,8 @@ object AdManager {
         val prefs = context.getSharedPreferences(PREFS_ADS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastMs = prefs.getLong(KEY_LAST_SPONSOR_TASK_MS, 0L)
-        val remainingMs = SPONSOR_TASK_COOLDOWN_MS - (now - lastMs)
-        if (remainingMs > 0L) {
+        if (DirectLinkHelper.shouldSkipDirectLinkGate(lastMs, now, SPONSOR_TASK_COOLDOWN_MS)) {
+            val remainingMs = SPONSOR_TASK_COOLDOWN_MS - (now - lastMs)
             val mins = maxOf(1L, (remainingMs + 59_999L) / 60_000L)
             onUnavailableOrCooldown("Bonus task available again in ${mins}m.")
             return
@@ -938,7 +980,6 @@ object AdManager {
                 val ts = System.currentTimeMillis()
                 prefs.edit()
                     .putLong(KEY_LAST_SPONSOR_TASK_MS, ts)
-                    .putLong(KEY_LAST_ANY_DIRECT_LINK_MS, ts)
                     .apply()
                 onRewarded()
             },
@@ -1002,7 +1043,7 @@ object AdManager {
                     activity = activity,
                     onRewarded = onRewarded,
                     onFailed = { startioErr ->
-                        if (unityAppKey.isNotEmpty()) {
+                        if (hasValidUnityLevelPlayKey()) {
                             loadAndShowUnityRewarded(
                                 activity = activity,
                                 onRewarded = onRewarded,
@@ -1396,15 +1437,19 @@ object AdManager {
                     onClosed = wrappedOnClosed,
                     onDisplayed = markDisplayed,
                     onFailed = {
-                        if (unityAppKey.isNotEmpty()) {
-                            loadAndShowUnityInterstitial(
-                                activity = activity,
-                                onClosed = wrappedOnClosed,
-                                onDisplayed = markDisplayed,
-                                onFailed = {
-                                    wrappedOnClosed()
-                                }
-                            )
+                        if (hasValidUnityLevelPlayKey()) {
+                            if (waitForColdLoad || IronSource.isInterstitialReady()) {
+                                loadAndShowUnityInterstitial(
+                                    activity = activity,
+                                    onClosed = wrappedOnClosed,
+                                    onDisplayed = markDisplayed,
+                                    onFailed = {
+                                        wrappedOnClosed()
+                                    }
+                                )
+                            } else {
+                                wrappedOnClosed()
+                            }
                         } else {
                             wrappedOnClosed()
                         }
@@ -1572,44 +1617,95 @@ object AdManager {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 minHeightPx
             )
-            // Keep container measurable in Compose AndroidView so Start.io Banner loads reliably
+            // Keep visible initially so Compose measures it while Start.io runs first load; collapse on NO FILL
             visibility = View.VISIBLE
         }
+
+        val isAttached = AtomicBoolean(true)
+        var pendingRetry: Runnable? = null
+        var attemptCount = 0
+
+        lateinit var loadFreshBannerAttempt: () -> Unit
 
         val listener = object : BannerListener {
             override fun onReceiveAd(bannerView: View?) {
                 android.util.Log.d("AdManager", "✅ Start.io ${if (isMrec) "MREC" else "Banner"} loaded")
                 mainHandler.post {
+                    container.layoutParams = (container.layoutParams ?: ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        minHeightPx
+                    )).apply { height = minHeightPx }
                     container.visibility = View.VISIBLE
                     bannerView?.visibility = View.VISIBLE
                     (bannerView as? com.startapp.sdk.ads.banner.bannerstandard.BannerStandard)?.showBanner()
                     container.requestLayout()
                 }
             }
+
             override fun onFailedToReceiveAd(bannerView: View?) {
                 android.util.Log.w("AdManager", "⚠️ Start.io ${if (isMrec) "MREC" else "Banner"} failed: ${(bannerView as? com.startapp.sdk.ads.banner.BannerBase)?.errorMessage}")
                 mainHandler.post {
                     container.visibility = View.GONE
+                    if (!isAttached.get()) return@post
+                    if (attemptCount < 2) {
+                        val delayMs = if (attemptCount == 0) 12_000L else 28_000L
+                        attemptCount++
+                        pendingRetry?.let { mainHandler.removeCallbacks(it) }
+                        val r = Runnable {
+                            if (isAttached.get()) loadFreshBannerAttempt()
+                        }
+                        pendingRetry = r
+                        mainHandler.postDelayed(r, delayMs)
+                    } else if (!isMrec && currentNetwork == AdNetwork.BOTH && hasValidUnityLevelPlayKey()) {
+                        val activity = context.findActivity() ?: pendingActivity?.get()
+                        if (activity != null && !activity.isFinishing && !activity.isDestroyed) {
+                            initUnityLevelPlay(activity, unityAppKey)
+                            val unityBanner = IronSource.createBanner(activity, ISBannerSize.BANNER)
+                            container.removeAllViews()
+                            container.addView(unityBanner)
+                            container.visibility = View.VISIBLE
+                            if (unityBannerId.isNotEmpty()) IronSource.loadBanner(unityBanner, unityBannerId)
+                            else IronSource.loadBanner(unityBanner)
+                        }
+                    }
                 }
             }
+
             override fun onImpression(bannerView: View?) {}
             override fun onClick(bannerView: View?) {}
         }
 
-        val banner = (if (isMrec) Mrec(context) else Banner(context)).apply {
-            setBannerListener(listener)
-        }
-        // CRITICAL: Call loadAd(widthDp, heightDp) BEFORE addView(), because Start.io BannerBase.loadAd()
-        // aborts silently if view.getParent() != null.
-        banner.loadAd(widthDp, heightDp)
-        container.addView(
-            banner,
-            FrameLayout.LayoutParams(
-                widthPx,
-                minHeightPx,
-                Gravity.CENTER_HORIZONTAL
+        loadFreshBannerAttempt = {
+            // CRITICAL: Call loadAd(widthDp, heightDp) BEFORE addView() on a fresh unattached BannerBase instance,
+            // because Start.io BannerBase.loadAd() returns early if getParent() != null.
+            val banner = (if (isMrec) Mrec(context) else Banner(context)).apply {
+                setBannerListener(listener)
+            }
+            banner.loadAd(widthDp, heightDp)
+            container.removeAllViews()
+            container.addView(
+                banner,
+                FrameLayout.LayoutParams(
+                    widthPx,
+                    minHeightPx,
+                    Gravity.CENTER_HORIZONTAL
+                )
             )
-        )
+        }
+
+        container.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                isAttached.set(true)
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                isAttached.set(false)
+                pendingRetry?.let { mainHandler.removeCallbacks(it) }
+                pendingRetry = null
+            }
+        })
+
+        loadFreshBannerAttempt()
         return container
     }
 
@@ -1619,7 +1715,7 @@ object AdManager {
 
         return when (currentNetwork) {
             AdNetwork.UNITY -> {
-                if (activity != null && unityAppKey.isNotEmpty()) {
+                if (activity != null && hasValidUnityLevelPlayKey()) {
                     initUnityLevelPlay(activity, unityAppKey)
                     val banner = IronSource.createBanner(activity, ISBannerSize.BANNER)
                     if (unityBannerId.isNotEmpty()) {
@@ -1634,7 +1730,7 @@ object AdManager {
             }
             AdNetwork.STARTIO, AdNetwork.BOTH -> {
                 createStartIoBannerContainer(context, isMrec = false) ?: run {
-                    if (currentNetwork == AdNetwork.BOTH && activity != null && unityAppKey.isNotEmpty()) {
+                    if (currentNetwork == AdNetwork.BOTH && activity != null && hasValidUnityLevelPlayKey()) {
                         initUnityLevelPlay(activity, unityAppKey)
                         val banner = IronSource.createBanner(activity, ISBannerSize.BANNER)
                         if (unityBannerId.isNotEmpty()) IronSource.loadBanner(banner, unityBannerId)

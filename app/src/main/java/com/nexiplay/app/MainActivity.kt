@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
             if (!OneSignal.Notifications.permission) {
                 OneSignal.Notifications.requestPermission(false)
             }
+            EpisodeUpdatesNotificationManager.syncOneSignalSubscriptionState()
             try {
                 SupabaseClient.main.auth.awaitInitialization()
             } catch (_: Exception) {}
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
             val uid = SupabaseClient.main.auth.currentUserOrNull()?.id
             if (uid != null) {
                 OneSignal.login(uid)
+                EpisodeUpdatesNotificationManager.syncOneSignalSubscriptionState()
 
                 try {
                     val p = SupabaseClient.main.from("profiles")
@@ -128,6 +130,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        CoroutineScope(Dispatchers.IO).launch {
+            com.nexiplay.app.data.util.AdManager.ensureConfigLoaded(SupabaseClient.main)
+        }
+        EpisodeUpdatesNotificationManager.syncOneSignalSubscriptionState()
         if (System.currentTimeMillis() - launchedAtMs > 12_000L) {
             EpisodeUpdatesNotificationManager.checkAndNotifyNewUpdates(this)
         }
@@ -137,6 +143,12 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         try { com.ironsource.mediationsdk.IronSource.onPause(this) } catch (_: Exception) {}
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.nexiplay.app.data.util.NotificationSyncWorker.schedulePeriodic(this)
+        com.nexiplay.app.data.util.NotificationSyncWorker.enqueueOneShotCatchUp(this, delaySeconds = 45L)
     }
 
     override fun onDestroy() {

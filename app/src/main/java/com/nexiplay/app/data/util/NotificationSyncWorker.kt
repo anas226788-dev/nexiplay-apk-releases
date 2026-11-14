@@ -1,6 +1,7 @@
 package com.nexiplay.app.data.util
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -55,11 +56,12 @@ class NotificationSyncWorker(
                     15, TimeUnit.MINUTES
                 )
                     .setConstraints(connectedConstraints)
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                     .build()
 
                 WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
                     PERIODIC_WORK_NAME,
-                    ExistingPeriodicWorkPolicy.KEEP,
+                    ExistingPeriodicWorkPolicy.UPDATE,
                     request
                 )
             }
@@ -73,17 +75,20 @@ class NotificationSyncWorker(
             }
         }
 
-        fun enqueueOneShotCatchUp(context: Context) {
+        fun enqueueOneShotCatchUp(context: Context, delaySeconds: Long = 0L) {
             runCatching {
                 val appContext = context.applicationContext
-                val request = OneTimeWorkRequestBuilder<NotificationSyncWorker>()
+                val builder = OneTimeWorkRequestBuilder<NotificationSyncWorker>()
                     .setConstraints(connectedConstraints)
-                    .build()
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                if (delaySeconds > 0L) {
+                    builder.setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+                }
 
                 WorkManager.getInstance(appContext).enqueueUniqueWork(
                     CATCHUP_WORK_NAME,
-                    ExistingWorkPolicy.KEEP,
-                    request
+                    ExistingWorkPolicy.REPLACE,
+                    builder.build()
                 )
             }
         }

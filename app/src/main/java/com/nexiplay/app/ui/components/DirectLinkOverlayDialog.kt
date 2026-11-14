@@ -1,19 +1,26 @@
 package com.nexiplay.app.ui.components
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.net.http.SslError
+import android.os.Message
+import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,18 +32,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,6 +66,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,10 +75,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nexiplay.app.data.util.AdManager
+import com.nexiplay.app.data.util.DirectLinkHelper
 import kotlinx.coroutines.delay
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -85,6 +98,7 @@ fun DirectLinkOverlayDialog() {
     var isLoadingPage by remember(current.id) { mutableStateOf(true) }
     var loadEpoch by remember(current.id) { mutableIntStateOf(0) }
     var isPageLoaded by remember(current.id) { mutableStateOf(false) }
+    var mainFrameError by remember(current.id) { mutableStateOf<String?>(null) }
     var webViewRef by remember(current.id) { mutableStateOf<WebView?>(null) }
 
     val totalSeconds = current.durationSeconds.coerceAtLeast(1)
@@ -116,10 +130,10 @@ fun DirectLinkOverlayDialog() {
         }
     }
 
-    // Safety fallback cap (15s foreground wait max) so a stalled third-party analytics script never locks users forever
+    // Safety fallback cap (12s foreground wait max) so a stalled third-party script never locks users forever
     LaunchedEffect(current.id, isForeground) {
         var foregroundWaitMs = 0L
-        while (!isPageLoaded && foregroundWaitMs < 15_000L) {
+        while (!isPageLoaded && foregroundWaitMs < 12_000L) {
             if (isForeground) {
                 delay(250L)
                 foregroundWaitMs += 250L
@@ -127,7 +141,7 @@ fun DirectLinkOverlayDialog() {
                 delay(250L)
             }
         }
-        if (!isPageLoaded && foregroundWaitMs >= 15_000L) {
+        if (!isPageLoaded && foregroundWaitMs >= 12_000L) {
             isPageLoaded = true
         }
     }
@@ -162,15 +176,68 @@ fun DirectLinkOverlayDialog() {
             usePlatformDefaultWidth = false,
             dismissOnBackPress = true,
             dismissOnClickOutside = false,
-            decorFitsSystemWindows = false
+            decorFitsSystemWindows = true
         )
     ) {
+        val dialogView = LocalView.current
+        val density = LocalDensity.current
+        val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+
+        val initialVisibleHeightPx = remember(current.id) {
+            val rect = Rect()
+            val decor = (context as? android.app.Activity)?.window?.decorView
+            if (decor != null) {
+                decor.getWindowVisibleDisplayFrame(rect)
+                (rect.bottom - rect.top).takeIf { it > 300 } ?: 0
+            } else {
+                0
+            }
+        }
+        var containerHeightPx by remember(current.id) { mutableIntStateOf(initialVisibleHeightPx) }
+        var topInsetPx by remember(current.id) { mutableIntStateOf(0) }
+
+        DisposableEffect(dialogView, dialogWindow, current.id) {
+            val decor = dialogWindow?.decorView ?: (dialogView.rootView ?: dialogView)
+            val updateVisibleBounds = {
+                val visibleRect = Rect()
+                decor.getWindowVisibleDisplayFrame(visibleRect)
+                val loc = IntArray(2)
+                dialogView.getLocationOnScreen(loc)
+                val maxHeight = visibleRect.bottom - loc[1]
+                val neededTop = (visibleRect.top - loc[1]).coerceAtLeast(0)
+                if (dialogView.isAttachedToWindow && visibleRect.bottom > visibleRect.top && maxHeight > 300) {
+                    containerHeightPx = maxHeight
+                    topInsetPx = neededTop
+                }
+            }
+            val listener = ViewTreeObserver.OnGlobalLayoutListener { updateVisibleBounds() }
+            decor.viewTreeObserver.addOnGlobalLayoutListener(listener)
+            dialogView.post { updateVisibleBounds() }
+            onDispose {
+                decor.viewTreeObserver.removeOnGlobalLayoutListener(listener)
+            }
+        }
+
+        SideEffect {
+            dialogWindow?.let { window ->
+                window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                window.setBackgroundDrawable(ColorDrawable(0xFF0B0F19.toInt()))
+                window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            }
+        }
+
+        val rootModifier = if (containerHeightPx > 0) {
+            Modifier
+                .fillMaxWidth()
+                .height(with(density) { containerHeightPx.toDp() })
+        } else {
+            Modifier.fillMaxSize()
+        }
+
         Column(
-            modifier = Modifier
-                .fillMaxSize()
+            modifier = rootModifier
                 .background(Color(0xFF0B0F19))
-                .statusBarsPadding()
-                .navigationBarsPadding()
+                .padding(top = with(density) { topInsetPx.toDp() })
         ) {
             // Top Overlay Countdown Header
             Column(
@@ -238,7 +305,7 @@ fun DirectLinkOverlayDialog() {
                         Text(
                             text = when {
                                 isReady -> "Verified! Tap ${current.actionLabel} below"
-                                !isPageLoaded -> "Loading sponsor page... timer starts once loaded (${pageProgress}%)"
+                                !isPageLoaded -> "Loading verification page... (${pageProgress}%)"
                                 else -> "Page loaded • Wait ${remainingSeconds}s to continue"
                             },
                             fontSize = 11.sp,
@@ -248,15 +315,11 @@ fun DirectLinkOverlayDialog() {
                         )
                     }
 
-                    // Open in external browser option (timer still stays tied to verification)
+                    // Open in external browser option
                     IconButton(
                         onClick = {
-                            try {
-                                val target = webViewRef?.url?.takeIf {
-                                    it.startsWith("http://") || it.startsWith("https://")
-                                } ?: current.url
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
-                            } catch (_: Exception) {}
+                            val target = webViewRef?.url?.let { DirectLinkHelper.normalizeHttpUrl(it) } ?: current.url
+                            AdManager.openExternalDirectLink(context, target)
                         },
                         modifier = Modifier.size(34.dp)
                     ) {
@@ -339,8 +402,10 @@ fun DirectLinkOverlayDialog() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(Color.White)
+                    .background(Color(0xFF0F172A))
             ) {
+                var pendingPopupView by remember(current.id) { mutableStateOf<WebView?>(null) }
+
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
@@ -357,13 +422,13 @@ fun DirectLinkOverlayDialog() {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
                                 loadsImagesAutomatically = true
-                                javaScriptCanOpenWindowsAutomatically = false
-                                setSupportMultipleWindows(false)
+                                javaScriptCanOpenWindowsAutomatically = true
+                                setSupportMultipleWindows(true)
                                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                 useWideViewPort = true
                                 loadWithOverviewMode = true
                                 userAgentString =
-                                    "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
                             }
 
                             webChromeClient = object : WebChromeClient() {
@@ -372,6 +437,100 @@ fun DirectLinkOverlayDialog() {
                                     if (newProgress >= 100 && loadEpoch > 0) {
                                         isLoadingPage = false
                                     }
+                                }
+
+                                override fun onCreateWindow(
+                                    view: WebView?,
+                                    isDialog: Boolean,
+                                    isUserGesture: Boolean,
+                                    resultMsg: Message?
+                                ): Boolean {
+                                    val mainWebView = view ?: return false
+                                    val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+
+                                    // Fast path if anchor href is already known via HitTestResult
+                                    val hitExtra = runCatching { mainWebView.hitTestResult.extra }.getOrNull()
+                                    if (!hitExtra.isNullOrBlank()) {
+                                        when (DirectLinkHelper.classifyOverlayUrl(hitExtra)) {
+                                            DirectLinkHelper.OverlayUrlAction.LOAD_IN_WEBVIEW -> {
+                                                mainFrameError = null
+                                                isLoadingPage = true
+                                                mainWebView.loadUrl(hitExtra)
+                                                return false
+                                            }
+                                            DirectLinkHelper.OverlayUrlAction.OPEN_EXTERNAL -> {
+                                                handleExternalOverlayUrl(ctx, hitExtra, mainWebView)
+                                                return false
+                                            }
+                                            DirectLinkHelper.OverlayUrlAction.IGNORE -> Unit
+                                        }
+                                    }
+
+                                    // Ephemeral popup interceptor routes window.open / target="_blank" safely
+                                    pendingPopupView?.let { old ->
+                                        runCatching {
+                                            old.stopLoading()
+                                            old.destroy()
+                                        }
+                                    }
+                                    val popupInterceptor = WebView(ctx)
+                                    popupInterceptor.settings.javaScriptEnabled = true
+                                    popupInterceptor.webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(
+                                            pView: WebView?,
+                                            req: WebResourceRequest?
+                                        ): Boolean {
+                                            val targetUrl = req?.url?.toString().orEmpty()
+                                            routePopupUrl(ctx, targetUrl, mainWebView)
+                                            cleanupPopupView(popupInterceptor)
+                                            return true
+                                        }
+
+                                        override fun onPageStarted(
+                                            pView: WebView?,
+                                            url: String?,
+                                            favicon: android.graphics.Bitmap?
+                                        ) {
+                                            if (!url.isNullOrBlank() && url != "about:blank") {
+                                                routePopupUrl(ctx, url, mainWebView)
+                                                cleanupPopupView(popupInterceptor)
+                                            }
+                                        }
+
+                                        private fun routePopupUrl(
+                                            context: Context,
+                                            url: String,
+                                            hostWebView: WebView
+                                        ) {
+                                            when (DirectLinkHelper.classifyOverlayUrl(url)) {
+                                                DirectLinkHelper.OverlayUrlAction.LOAD_IN_WEBVIEW -> {
+                                                    mainFrameError = null
+                                                    isLoadingPage = true
+                                                    hostWebView.loadUrl(url)
+                                                }
+                                                DirectLinkHelper.OverlayUrlAction.OPEN_EXTERNAL -> {
+                                                    handleExternalOverlayUrl(context, url, hostWebView)
+                                                }
+                                                DirectLinkHelper.OverlayUrlAction.IGNORE -> Unit
+                                            }
+                                        }
+
+                                        private fun cleanupPopupView(target: WebView) {
+                                            target.post {
+                                                runCatching {
+                                                    target.stopLoading()
+                                                    target.destroy()
+                                                }
+                                                if (pendingPopupView === target) {
+                                                    pendingPopupView = null
+                                                }
+                                            }
+                                        }
+                                    }
+                                    pendingPopupView = popupInterceptor
+                                    transport.webView = popupInterceptor
+                                    resultMsg.sendToTarget()
+                                    return true
                                 }
                             }
 
@@ -383,6 +542,7 @@ fun DirectLinkOverlayDialog() {
                                 ) {
                                     super.onPageStarted(view, url, favicon)
                                     if (!url.isNullOrBlank() && url != "about:blank") {
+                                        mainFrameError = null
                                         isLoadingPage = true
                                         loadEpoch++
                                     }
@@ -398,22 +558,50 @@ fun DirectLinkOverlayDialog() {
                                     }
                                 }
 
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    error: WebResourceError?
+                                ) {
+                                    super.onReceivedError(view, request, error)
+                                    if (request?.isForMainFrame == true) {
+                                        mainFrameError = error?.description?.toString()
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?: "Could not reach verification page"
+                                        isLoadingPage = false
+                                        if (loadEpoch == 0) loadEpoch = 1
+                                        isPageLoaded = true
+                                    }
+                                }
+
+                                override fun onReceivedSslError(
+                                    view: WebView?,
+                                    handler: SslErrorHandler?,
+                                    error: SslError?
+                                ) {
+                                    handler?.cancel()
+                                    mainFrameError = "Secure connection unavailable"
+                                    isLoadingPage = false
+                                    if (loadEpoch == 0) loadEpoch = 1
+                                    isPageLoaded = true
+                                }
+
                                 override fun shouldOverrideUrlLoading(
                                     view: WebView?,
                                     request: WebResourceRequest?
                                 ): Boolean {
                                     val nextUrl = request?.url?.toString().orEmpty()
-                                    if (nextUrl.startsWith("http://", ignoreCase = true) ||
-                                        nextUrl.startsWith("https://", ignoreCase = true)
-                                    ) {
-                                        isLoadingPage = true
-                                        return false // keep inside overlay WebView
-                                    }
-                                    return try {
-                                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(nextUrl)))
-                                        true
-                                    } catch (_: Exception) {
-                                        true
+                                    return when (DirectLinkHelper.classifyOverlayUrl(nextUrl)) {
+                                        DirectLinkHelper.OverlayUrlAction.IGNORE -> true
+                                        DirectLinkHelper.OverlayUrlAction.LOAD_IN_WEBVIEW -> {
+                                            mainFrameError = null
+                                            isLoadingPage = true
+                                            false // keep inside overlay WebView
+                                        }
+                                        DirectLinkHelper.OverlayUrlAction.OPEN_EXTERNAL -> {
+                                            handleExternalOverlayUrl(ctx, nextUrl, view)
+                                            true
+                                        }
                                     }
                                 }
                             }
@@ -423,28 +611,103 @@ fun DirectLinkOverlayDialog() {
                         }
                     },
                     onRelease = { wv ->
+                        pendingPopupView?.let { pv ->
+                            runCatching {
+                                pv.stopLoading()
+                                pv.destroy()
+                            }
+                            pendingPopupView = null
+                        }
                         webViewRef = null
-                        try {
+                        runCatching {
                             wv.stopLoading()
                             wv.destroy()
-                        } catch (_: Exception) {}
+                        }
                     }
                 )
+
+                // Non-blocking error recovery overlay if DNS/ad-blocker/network blocks the sponsor URL
+                if (mainFrameError != null) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xE6111827))
+                            .border(1.dp, Color(0x4DF59E0B), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Verification page blocked or slow on this network",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFBBF24)
+                            )
+                            Text(
+                                text = "Wait for timer below or open link in browser",
+                                fontSize = 11.sp,
+                                color = Color(0xFFD1D5DB),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.1f))
+                                .clickable {
+                                    mainFrameError = null
+                                    isLoadingPage = true
+                                    webViewRef?.loadUrl(current.url)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = "Retry",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text("Retry", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF2563EB))
+                                .clickable {
+                                    AdManager.openExternalDirectLink(context, current.url)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("Open", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                }
             }
 
-            // Prominent bottom CTA bar when countdown finishes so every user spots Watch / Download / Read immediately
-            AnimatedVisibility(
-                visible = isReady,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 })
+            // Always-reserved bottom footer slot prevents vertical jump/clipping under edge-to-edge navigation bars
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 86.dp)
+                    .background(Color(0xFF0F172A))
+                    .border(
+                        1.dp,
+                        if (isReady) Color(0xFF10B981).copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f)
+                    )
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF0F172A))
-                        .border(1.dp, Color(0xFF10B981).copy(alpha = 0.35f))
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                if (isReady) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -453,21 +716,23 @@ fun DirectLinkOverlayDialog() {
                             imageVector = Icons.Rounded.CheckCircle,
                             contentDescription = null,
                             tint = Color(0xFF34D399),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
                         Text(
                             text = "Verification complete! Tap below to continue",
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF34D399)
+                            color = Color(0xFF34D399),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .background(
                                 Brush.horizontalGradient(
                                     listOf(Color(0xFF10B981), Color(0xFF059669))
@@ -482,8 +747,13 @@ fun DirectLinkOverlayDialog() {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            val ctaIcon = when {
+                                current.actionLabel.contains("download", ignoreCase = true) -> Icons.Rounded.CloudDownload
+                                current.actionLabel.contains("claim", ignoreCase = true) -> Icons.Rounded.CheckCircle
+                                else -> Icons.Rounded.PlayArrow
+                            }
                             Icon(
-                                imageVector = Icons.Rounded.PlayArrow,
+                                imageVector = ctaIcon,
                                 contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(22.dp)
@@ -496,8 +766,75 @@ fun DirectLinkOverlayDialog() {
                             )
                         }
                     }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(36.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Timer,
+                            contentDescription = null,
+                            tint = Color(0xFFC4B5FD),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (!isPageLoaded) {
+                                "Verifying access... ${current.actionLabel} unlocks shortly"
+                            } else {
+                                "Please wait ${remainingSeconds}s to unlock ${current.actionLabel}"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFD1D5DB),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+private fun handleExternalOverlayUrl(
+    ctx: Context,
+    nextUrl: String,
+    webView: WebView?
+) {
+    if (nextUrl.startsWith("intent://", ignoreCase = true)) {
+        val parsed = runCatching { Intent.parseUri(nextUrl, Intent.URI_INTENT_SCHEME) }.getOrNull()
+        if (parsed != null) {
+            if (ctx !is android.app.Activity) {
+                parsed.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val canLaunch = runCatching { parsed.resolveActivity(ctx.packageManager) != null }.getOrDefault(false)
+            if (canLaunch && runCatching { ctx.startActivity(parsed) }.isSuccess) {
+                return
+            }
+            val fallback = DirectLinkHelper.normalizeHttpUrl(parsed.getStringExtra("browser_fallback_url"))
+                ?: DirectLinkHelper.extractBrowserFallbackUrlFromIntentUri(nextUrl)
+            if (fallback != null && webView != null) {
+                webView.post { webView.loadUrl(fallback) }
+                return
+            }
+        }
+        val uriFallback = DirectLinkHelper.extractBrowserFallbackUrlFromIntentUri(nextUrl)
+        if (uriFallback != null && webView != null) {
+            webView.post { webView.loadUrl(uriFallback) }
+        }
+        return
+    }
+
+    runCatching {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(nextUrl)).apply {
+            if (ctx !is android.app.Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+        ctx.startActivity(intent)
     }
 }
